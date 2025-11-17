@@ -369,6 +369,12 @@ async fn healthz() -> impl IntoResponse {
     )
 }
 
+/// 处理 favicon.ico 请求
+async fn favicon() -> impl IntoResponse {
+    // 返回 204 No Content，避免日志警告
+    axum::http::StatusCode::NO_CONTENT
+}
+
 async fn index() -> impl IntoResponse {
     match tokio::fs::read_to_string("web/index.html").await {
         Ok(content) => (axum::http::StatusCode::OK, axum::response::Html(content)).into_response(),
@@ -737,8 +743,12 @@ async fn redirect_short(
     };
 
     let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(10))
+        .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
         .user_agent("sub/0.1")
+        .danger_accept_invalid_certs(false)
+        .tcp_keepalive(Duration::from_secs(60))
+        .pool_idle_timeout(Duration::from_secs(90))
         .build()
     {
         Ok(c) => c,
@@ -767,54 +777,57 @@ async fn redirect_short(
                 let _permit = semaphore.acquire().await.ok()?;
 
                 let mut attempt = 0;
+                let mut last_error = String::new();
+
                 while attempt <= MAX_RETRIES {
                     attempt += 1;
                     match client.get(&url).send().await {
                         Ok(resp) => match resp.error_for_status() {
                             Ok(ok_resp) => match ok_resp.text().await {
                                 Ok(text) => {
-                                    tracing::info!(
-                                        "fetched content from {} ({} bytes, attempt {})",
-                                        url,
-                                        text.len(),
-                                        attempt
-                                    );
+                                    if attempt > 1 {
+                                        tracing::info!(
+                                            "fetched content from {} ({} bytes, succeeded on attempt {})",
+                                            url,
+                                            text.len(),
+                                            attempt
+                                        );
+                                    } else {
+                                        tracing::debug!(
+                                            "fetched content from {} ({} bytes)",
+                                            url,
+                                            text.len()
+                                        );
+                                    }
                                     return Some(text);
                                 }
                                 Err(e) => {
-                                    tracing::warn!(
-                                        "failed to read response body from {} (attempt {}): {}",
-                                        url,
-                                        attempt,
-                                        e
-                                    );
+                                    last_error = format!("failed to read response body: {}", e);
                                 }
                             },
                             Err(e) => {
-                                tracing::warn!(
-                                    "non-success status from {} (attempt {}): {}",
-                                    url,
-                                    attempt,
-                                    e
-                                );
+                                last_error = format!("non-success status: {}", e);
                             }
                         },
                         Err(e) => {
-                            tracing::warn!(
-                                "request failed for {} (attempt {}): {}",
-                                url,
-                                attempt,
-                                e
-                            );
+                            last_error = format!("request error: {}", e);
                         }
                     }
 
                     // 重试前等待一小段时间（指数退避）
                     if attempt <= MAX_RETRIES {
-                        let backoff_ms = 100 * (1 << (attempt - 1)); // 100ms, 200ms
+                        let backoff_ms = 200 * (1 << (attempt - 1)); // 200ms, 400ms
                         tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                     }
                 }
+
+                // 所有重试都失败后才记录警告
+                tracing::warn!(
+                    "failed to fetch {} after {} attempts, last error: {}",
+                    url,
+                    MAX_RETRIES + 1,
+                    last_error
+                );
                 None
             })
         })
@@ -981,6 +994,7 @@ async fn main() {
     let app = Router::new()
         .route("/", get(index))
         .route("/healthz", get(healthz))
+        .route("/favicon.ico", get(favicon))
         .route("/api/login", post(login))
         .route("/api/info/{code}", get(info))
         .route("/{code}", get(redirect_short))

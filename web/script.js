@@ -572,25 +572,14 @@ document.getElementById("form").addEventListener("submit", async (e) => {
 		console.log("创建成功:", data);
 		
 		// 重新加载用户列表
-		loadUserList();
+		await loadUserList();
 		
-		// 编辑模式下直接关闭弹窗，不显示成功提示
-		if (isEditMode) {
-			showNotification(`用户 "${data.username}" 已更新`, 'success');
-			closeModal();
-		} else {
-			// 添加模式下显示用户链接
-			const userUrl = base + "/" + data.username;
-			const box = document.getElementById("result");
-			box.style.display = "block";
-			box.innerHTML =
-				`<strong>✓ 成功！</strong> 用户链接：<a href="${userUrl}" target="_blank">${userUrl}</a>`;
-			
-			// 2秒后关闭弹窗
-			setTimeout(() => {
-				closeModal();
-			}, 2000);
-		}
+		// 显示通知
+		const actionText = isEditMode ? '已更新' : '已创建';
+		showNotification(`用户 "${data.username}" ${actionText}`, 'success');
+		
+		// 关闭弹窗
+		closeModal();
 	} catch (error) {
 		console.error("请求异常:", error);
 		showNotification('请求失败: ' + error.message, 'error');
