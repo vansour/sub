@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="zh-cn">
+	<head>
+		<meta charset="UTF-8" />
+		<title>多链接短链接合并服务</title>
+		<link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
+		<link rel="stylesheet" href="/static/style.css" />
+	</head>
+	<body>
+		<div class="container">
+			<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+				<h1>多链接管理服务</h1>
+				<div style="display: flex; gap: 10px;">
+					<button id="settingsBtn" class="btn-secondary">⚙️ 设置</button>
+					<button id="logoutBtn" class="btn-secondary">退出</button>
+				</div>
+			</div>
+			
+			<div class="section">
+				<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+					<h2>用户列表</h2>
+					<button id="addUserBtn" class="btn-primary">+ 添加用户</button>
+				</div>
+				<div id="userList" class="user-list">
+					<p class="loading">加载中...</p>
+				</div>
+			</div>
+		</div>
+
+		<!-- 弹窗：添加/编辑用户 -->
+		<div id="modal" class="modal">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h3 id="modalTitle">添加用户</h3>
+					<button class="close-btn" onclick="closeModal()">&times;</button>
+				</div>
+				<form id="form">
+					<label for="username">用户名</label>
+					<input
+						id="username"
+						type="text"
+						placeholder="例如: user1"
+						required
+					/>
+					<label for="urls">链接列表（每行一个）</label>
+					<textarea
+						id="urls"
+						placeholder="https://example.com/a&#10;https://example.com/b"
+						required
+					></textarea>
+					<div class="modal-actions">
+						<button type="button" class="btn-secondary" onclick="closeModal()">取消</button>
+						<button type="submit" class="btn-primary">保存</button>
+					</div>
+				</form>
+			</div>
+			<div id="result" class="result" style="display: none"></div>
+		</div>
+
+		<!-- 通知容器 -->
+		<div id="notification" class="notification"></div>
+
+		<!-- 确认弹窗 -->
+		<div id="confirmModal" class="modal">
+			<div class="modal-content confirm-modal-content">
+				<div class="modal-header">
+					<h3>确认操作</h3>
+				</div>
+				<div class="confirm-content">
+					<p id="confirmMessage"></p>
+					<div class="modal-actions">
+						<button class="btn-secondary" onclick="closeConfirmModal()">取消</button>
+						<button class="btn-danger" id="confirmOkBtn">确定</button>
+					</div>
+				</div>
+			</div>
+		</div>
+
+		<!-- 二维码弹窗 -->
+		<div id="qrModal" class="modal">
+			<div class="modal-content qr-modal-content">
+				<div class="modal-header">
+					<h3 id="qrTitle">用户链接</h3>
+					<button class="close-btn" onclick="closeQRModal()">&times;</button>
+				</div>
+				<div class="qr-content">
+					<div id="qrcode" class="qr-code"></div>
+					<div class="qr-link">
+						<input type="text" id="qrLink" readonly />
+						<button class="btn-primary" onclick="copyLink()">复制链接</button>
+					</div>
+					<p class="qr-hint">点击二维码也可复制链接</p>
+				</div>
+			</div>
+		</div>
+
+		<!-- 设置弹窗 -->
+		<div id="settingsModal" class="modal">
+			<div class="modal-content">
+				<div class="modal-header">
+					<h3>账号设置</h3>
+					<button class="close-btn" onclick="closeSettingsModal()">&times;</button>
+				</div>
+				<form id="settingsForm">
+					<label for="oldPassword">当前密码</label>
+					<input
+						type="password"
+						id="oldPassword"
+						placeholder="请输入当前密码"
+						autocomplete="current-password"
+						required
+					/>
+					
+					<label for="newUsername">新用户名</label>
+					<input
+						type="text"
+						id="newUsername"
+						placeholder="请输入新用户名"
+						autocomplete="username"
+						required
+					/>
+					
+					<label for="newPassword">新密码</label>
+					<input
+						type="password"
+						id="newPassword"
+						placeholder="请输入新密码"
+						autocomplete="new-password"
+						required
+					/>
+					
+					<label for="confirmPassword">确认新密码</label>
+					<input
+						type="password"
+						id="confirmPassword"
+						placeholder="请再次输入新密码"
+						autocomplete="new-password"
+						required
+					/>
+					
+					<div class="modal-actions">
+						<button type="button" class="btn-secondary" onclick="closeSettingsModal()">取消</button>
+						<button type="submit" class="btn-primary">保存</button>
+					</div>
+				</form>
+			</div>
+		</div>
+
+		<script src="https://cdn.jsdelivr.net/npm/qrcodejs@1.0.0/qrcode.min.js"></script>
+		<script src="/static/script.js"></script>
+	</body>
+  
+</html>
+

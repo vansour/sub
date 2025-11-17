@@ -1,0 +1,549 @@
+body {
+	font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+		sans-serif;
+	margin: 0;
+	padding: 20px;
+	line-height: 1.6;
+	background: #f9fafb;
+}
+
+.container {
+	max-width: 1000px;
+	margin: 0 auto;
+}
+
+h1 {
+	color: #111827;
+	margin-bottom: 30px;
+}
+
+h2 {
+	color: #374151;
+	font-size: 1.25rem;
+	margin-bottom: 15px;
+}
+
+.section {
+	background: white;
+	padding: 24px;
+	margin-bottom: 24px;
+	border-radius: 8px;
+	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+label {
+	display: block;
+	margin-bottom: 6px;
+	font-weight: 500;
+	color: #374151;
+}
+
+input[type="text"],
+input[type="password"],
+textarea {
+	width: 100%;
+	padding: 10px 12px;
+	margin-bottom: 16px;
+	border: 1px solid #d1d5db;
+	border-radius: 6px;
+	font-size: 14px;
+	box-sizing: border-box;
+	transition: border-color 0.2s;
+}
+
+input[type="text"]:focus,
+input[type="password"]:focus,
+textarea:focus {
+	outline: none;
+	border-color: #3b82f6;
+}
+
+textarea {
+	min-height: 120px;
+	font-family: monospace;
+	resize: vertical;
+}
+
+button {
+	padding: 10px 20px;
+	border: none;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 14px;
+	font-weight: 500;
+	transition: background 0.2s;
+}
+
+.btn-primary {
+	padding: 10px 20px;
+	background: #3b82f6;
+	color: white;
+	border: none;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 14px;
+	font-weight: 500;
+	transition: background 0.2s;
+}
+
+.btn-primary:hover {
+	background: #2563eb;
+}
+
+.btn-secondary {
+	padding: 10px 20px;
+	background: #f3f4f6;
+	color: #374151;
+	border: 1px solid #d1d5db;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 14px;
+	font-weight: 500;
+	transition: background 0.2s;
+}
+
+.btn-secondary:hover {
+	background: #e5e7eb;
+}
+
+.btn-danger {
+	padding: 10px 20px;
+	background: #dc2626;
+	color: white;
+	border: none;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 14px;
+	font-weight: 500;
+	transition: background 0.2s;
+}
+
+.btn-danger:hover {
+	background: #b91c1c;
+}
+
+.result {
+	margin-top: 16px;
+	padding: 12px 16px;
+	background: #d1fae5;
+	border: 1px solid #6ee7b7;
+	border-radius: 6px;
+	color: #065f46;
+}
+
+.result strong {
+	color: #047857;
+}
+
+.result a {
+	color: #059669;
+	font-weight: 500;
+}
+
+/* 用户列表样式 */
+.user-list {
+	min-height: 100px;
+}
+
+.user-list .loading,
+.user-list .empty,
+.user-list .error {
+	text-align: center;
+	padding: 20px;
+	color: #6b7280;
+}
+
+.user-list .error {
+	color: #dc2626;
+}
+
+table {
+	width: 100%;
+	border-collapse: collapse;
+}
+
+thead {
+	background: #f9fafb;
+}
+
+th {
+	text-align: left;
+	padding: 12px;
+	font-weight: 600;
+	color: #374151;
+	border-bottom: 2px solid #e5e7eb;
+}
+
+td {
+	padding: 12px;
+	border-bottom: 1px solid #e5e7eb;
+	vertical-align: top;
+}
+
+tr:last-child td {
+	border-bottom: none;
+}
+
+tr:hover {
+	background: #f9fafb;
+}
+
+.url-cell {
+	font-size: 13px;
+	max-width: 400px;
+	word-break: break-all;
+}
+
+.url-link {
+	color: #3b82f6;
+	text-decoration: none;
+}
+
+.url-link:hover {
+	text-decoration: underline;
+}
+
+.username-link {
+	color: #111827;
+	font-weight: 600;
+	text-decoration: none;
+}
+
+.username-link:hover {
+	color: #3b82f6;
+	text-decoration: underline;
+}
+
+.action-cell {
+	white-space: nowrap;
+}
+
+.btn-view,
+.btn-edit,
+.btn-delete {
+	display: inline-block;
+	padding: 6px 12px;
+	margin-right: 6px;
+	font-size: 13px;
+	border-radius: 4px;
+	transition: all 0.2s;
+	cursor: pointer;
+}
+
+.btn-view {
+	background: #dbeafe;
+	color: #1e40af;
+	border: 1px solid #93c5fd;
+}
+
+.btn-view:hover {
+	background: #bfdbfe;
+}
+
+.btn-edit {
+	background: #f3f4f6;
+	color: #374151;
+	border: 1px solid #d1d5db;
+}
+
+.btn-edit:hover {
+	background: #e5e7eb;
+}
+
+.btn-delete {
+	background: #fee2e2;
+	color: #991b1b;
+	border: 1px solid #fecaca;
+}
+
+.btn-delete:hover {
+	background: #fecaca;
+}
+
+/* 弹窗样式 */
+.modal {
+	display: none;
+	position: fixed;
+	z-index: 1000;
+	left: 0;
+	top: 0;
+	width: 100%;
+	height: 100%;
+	background-color: rgba(0, 0, 0, 0.5);
+	align-items: center;
+	justify-content: center;
+}
+
+.modal-content {
+	background-color: white;
+	padding: 0;
+	border-radius: 8px;
+	max-width: 600px;
+	width: 90%;
+	max-height: 90vh;
+	overflow-y: auto;
+	box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+}
+
+.modal-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	padding: 20px 24px;
+	border-bottom: 1px solid #e5e7eb;
+}
+
+.modal-header h3 {
+	margin: 0;
+	color: #111827;
+	font-size: 1.25rem;
+}
+
+.close-btn {
+	background: none;
+	border: none;
+	font-size: 28px;
+	color: #6b7280;
+	cursor: pointer;
+	padding: 0;
+	width: 32px;
+	height: 32px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	border-radius: 4px;
+}
+
+.close-btn:hover {
+	background: #f3f4f6;
+	color: #111827;
+}
+
+.modal-content form {
+	padding: 24px;
+}
+
+.modal-actions {
+	display: flex;
+	justify-content: flex-end;
+	gap: 12px;
+	margin-top: 20px;
+}
+
+/* 通知样式 */
+.notification {
+	position: fixed;
+	top: 20px;
+	right: 20px;
+	padding: 16px 24px;
+	border-radius: 8px;
+	box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+	font-size: 14px;
+	font-weight: 500;
+	z-index: 2000;
+	transform: translateX(400px);
+	transition: transform 0.3s ease;
+}
+
+.notification.show {
+	transform: translateX(0);
+}
+
+.notification-info {
+	background: #dbeafe;
+	color: #1e40af;
+	border: 1px solid #93c5fd;
+}
+
+.notification-success {
+	background: #d1fae5;
+	color: #065f46;
+	border: 1px solid #6ee7b7;
+}
+
+.notification-warning {
+	background: #fef3c7;
+	color: #92400e;
+	border: 1px solid #fcd34d;
+}
+
+.notification-error {
+	background: #fee2e2;
+	color: #991b1b;
+	border: 1px solid #fecaca;
+}
+
+/* 二维码弹窗样式 */
+.qr-modal-content {
+	max-width: 400px;
+}
+
+.confirm-modal-content {
+	max-width: 400px;
+}
+
+.confirm-content {
+	padding: 24px;
+}
+
+.confirm-content p {
+	margin: 0 0 20px 0;
+	color: #374151;
+	font-size: 15px;
+}
+
+.qr-content {
+	padding: 24px;
+	text-align: center;
+}
+
+.qr-code {
+	display: inline-block;
+	padding: 16px;
+	background: white;
+	border: 1px solid #e5e7eb;
+	border-radius: 8px;
+	margin-bottom: 20px;
+}
+
+.qr-code img {
+	display: block;
+}
+
+.qr-link {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 12px;
+}
+
+.qr-link input {
+	flex: 1;
+	margin-bottom: 0;
+}
+
+.qr-hint {
+	font-size: 13px;
+	color: #6b7280;
+	margin: 0;
+}
+
+code {
+	background: #e5e7eb;
+	padding: 2px 4px;
+	border-radius: 4px;
+}
+
+/* 错误状态样式 */
+.error-state,
+.empty-state,
+.loading-state {
+	text-align: center;
+	padding: 60px 20px;
+	color: #6b7280;
+}
+
+.error-state .error-icon,
+.empty-state .empty-icon {
+	font-size: 64px;
+	margin-bottom: 16px;
+	opacity: 0.6;
+}
+
+.error-state .error-message {
+	font-size: 16px;
+	color: #dc2626;
+	margin: 0 0 20px 0;
+}
+
+.empty-state .empty-message {
+	font-size: 18px;
+	font-weight: 500;
+	color: #374151;
+	margin: 0 0 8px 0;
+}
+
+.empty-state .empty-hint {
+	font-size: 14px;
+	color: #6b7280;
+	margin: 0;
+}
+
+.retry-btn {
+	padding: 10px 20px;
+	background: #3b82f6;
+	color: white;
+	border: none;
+	border-radius: 6px;
+	cursor: pointer;
+	font-size: 14px;
+	font-weight: 500;
+	transition: background 0.2s;
+	margin-top: 16px;
+}
+
+.retry-btn:hover {
+	background: #2563eb;
+}
+
+/* 加载动画 */
+.loading-state {
+	padding: 40px 20px;
+}
+
+.loading-spinner {
+	width: 40px;
+	height: 40px;
+	margin: 0 auto 16px;
+	border: 4px solid #e5e7eb;
+	border-top: 4px solid #3b82f6;
+	border-radius: 50%;
+	animation: spin 1s linear infinite;
+}
+
+.loading-state p {
+	color: #6b7280;
+	font-size: 14px;
+	margin: 0;
+}
+
+@keyframes spin {
+	0% { transform: rotate(0deg); }
+	100% { transform: rotate(360deg); }
+}
+
+/* 拖拽排序样式 */
+.drag-col {
+	width: 40px;
+	text-align: center;
+}
+
+.drag-handle {
+	cursor: move;
+	user-select: none;
+	font-size: 20px;
+	color: #9ca3af;
+	text-align: center;
+	padding: 8px !important;
+	transition: color 0.2s;
+}
+
+.drag-handle:hover {
+	color: #3b82f6;
+}
+
+tr[draggable="true"] {
+	transition: background-color 0.2s;
+}
+
+tr.dragging {
+	opacity: 0.5;
+	background: #f3f4f6;
+}
+
+tr.drag-over {
+	border-top: 2px solid #3b82f6;
+}
+
+tr[draggable="true"]:active {
+	cursor: move;
+}
