@@ -2,17 +2,15 @@ use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
 
+use crate::models::ApiResponse;
+
 /// 健康检查接口
 pub async fn healthz() -> impl IntoResponse {
     (
         StatusCode::OK,
-        Json(serde_json::json!({
-            "status": "healthy",
-            "timestamp": std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-        })),
+        Json(ApiResponse::<serde_json::Value>::success_with_message(
+            "系统正常",
+        )),
     )
 }
 

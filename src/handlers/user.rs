@@ -8,7 +8,9 @@ use std::time::Duration;
 
 use crate::{
     errors::AppError,
-    models::{CreateRequest, CreateResponse, InfoResponse, ReorderRequest, UsersResponse},
+    models::{
+        ApiResponse, CreateRequest, CreateResponse, InfoResponse, ReorderRequest, UsersResponse,
+    },
     services::{DataService, UrlService},
     AppState,
 };
@@ -123,7 +125,7 @@ pub async fn create_user(
         },
     };
 
-    Ok((StatusCode::OK, Json(response)))
+    Ok((StatusCode::OK, Json(ApiResponse::success(response))))
 }
 
 /// 获取用户信息
@@ -140,11 +142,11 @@ pub async fn get_user_info(
             url_count = user_data.urls.len(),
             "user info retrieved successfully"
         );
-        let body = Json(InfoResponse {
+        let response = InfoResponse {
             username,
             urls: user_data.urls.clone(),
-        });
-        Ok((StatusCode::OK, body).into_response())
+        };
+        Ok((StatusCode::OK, Json(ApiResponse::success(response))).into_response())
     } else {
         tracing::warn!(username = %username, "user not found");
         Err(AppError::NotFound(format!("User '{}' not found", username)))
@@ -159,7 +161,8 @@ pub async fn list_users(State(state): State<AppState>) -> impl IntoResponse {
     let users = data_service.get_all_users();
 
     tracing::info!(user_count = users.len(), "user list retrieved successfully");
-    Json(UsersResponse { users })
+    let response = UsersResponse { users };
+    Json(ApiResponse::success(response))
 }
 
 /// 删除用户
@@ -191,7 +194,12 @@ pub async fn delete_user(
         }
     }
 
-    Ok((StatusCode::OK, Json(serde_json::json!({}))))
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse::<serde_json::Value>::success_with_message(
+            "用户删除成功",
+        )),
+    ))
 }
 
 /// 重新排序用户
@@ -231,9 +239,9 @@ pub async fn reorder_users(
 
     Ok((
         StatusCode::OK,
-        Json(serde_json::json!({
-            "message": "Order updated successfully"
-        })),
+        Json(ApiResponse::<serde_json::Value>::success_with_message(
+            "排序更新成功",
+        )),
     ))
 }
 

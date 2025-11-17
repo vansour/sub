@@ -1,6 +1,6 @@
 use crate::{
     errors::AppError,
-    models::{ChangePasswordRequest, Claims, LoginRequest, LoginResponse},
+    models::{ApiResponse, ChangePasswordRequest, Claims, LoginRequest, LoginResponse},
     services::AuthService,
     utils::get_jwt_secret,
     AppState,
@@ -71,7 +71,10 @@ pub async fn login(
     };
 
     tracing::info!(username = %username, "login successful");
-    Ok((StatusCode::OK, Json(LoginResponse { token })))
+    Ok((
+        StatusCode::OK,
+        Json(ApiResponse::success(LoginResponse { token })),
+    ))
 }
 
 /// 修改密码
@@ -128,6 +131,8 @@ pub async fn change_password(
     tracing::info!(new_username = %new_username, "password changed successfully");
     Ok((
         StatusCode::OK,
-        Json(serde_json::json!({"message": "Password changed successfully"})),
+        Json(ApiResponse::<serde_json::Value>::success_with_message(
+            "密码修改成功",
+        )),
     ))
 }

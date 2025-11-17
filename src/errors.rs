@@ -3,7 +3,8 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
-use serde::Serialize;
+
+use crate::models::{ApiResponse, ErrorDetail};
 
 #[derive(Debug)]
 pub enum AppError {
@@ -21,39 +22,33 @@ pub enum AppError {
     ExternalServiceError(String),
 }
 
-#[derive(Serialize)]
-struct ErrorResponseBody {
-    error: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    details: Option<String>,
-}
-
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        let (status, error_message, details) = match self {
-            AppError::ValidationError(msg) => {
-                (StatusCode::BAD_REQUEST, "验证失败".to_string(), Some(msg))
-            }
+        let (status, error_detail) = match self {
+            AppError::ValidationError(msg) => (
+                StatusCode::BAD_REQUEST,
+                ErrorDetail::validation("request", msg),
+            ),
             AppError::AuthenticationError(msg) => {
-                (StatusCode::UNAUTHORIZED, "认证失败".to_string(), Some(msg))
+                (StatusCode::UNAUTHORIZED, ErrorDetail::authentication(msg))
             }
-            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, "资源未找到".to_string(), Some(msg)),
-            AppError::Conflict(msg) => (StatusCode::CONFLICT, "资源冲突".to_string(), Some(msg)),
+            AppError::NotFound(msg) => (StatusCode::NOT_FOUND, ErrorDetail::not_found("资源", msg)),
+            AppError::Conflict(msg) => (StatusCode::CONFLICT, ErrorDetail::conflict(msg)),
             AppError::InternalError(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "服务器内部错误".to_string(),
-                Some(msg),
+                ErrorDetail::internal_error(msg),
             ),
             AppError::ExternalServiceError(msg) => (
                 StatusCode::BAD_GATEWAY,
-                "外部服务错误".to_string(),
-                Some(msg),
+                ErrorDetail::external_service_error("外部服务", msg),
             ),
         };
 
-        let body = ErrorResponseBody {
-            error: error_message,
-            details,
+        let body: ApiResponse<()> = ApiResponse {
+            code: status.as_u16() as i32,
+            message: error_detail.message,
+            data: None,
+            timestamp: chrono::Local::now().timestamp(),
         };
 
         (status, Json(body)).into_response()
