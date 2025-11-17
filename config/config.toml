@@ -1,15 +1,10 @@
-[auth]
-password = "admin"
-secret = "202511"
-username = "admin"
-
-[data]
-dataFilePath = "/app/data/data.toml"
+[server]
+host = "0.0.0.0"
+port = 8080
 
 [log]
 level = "info"
 logFilePath = "/app/logs/v-ui.log"
 
-[server]
-host = "0.0.0.0"
-port = 8080
+[data]
+dataFilePath = "/app/data/data.toml"
