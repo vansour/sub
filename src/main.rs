@@ -1,15 +1,15 @@
 use std::{net::SocketAddr, time::Duration};
 
 use axum::{
-    Json, Router,
     extract::Path,
     extract::State,
-    http::{Request, StatusCode, header},
+    http::{header, Request, StatusCode},
     middleware::{self, Next},
     response::IntoResponse,
     routing::{get, post},
+    Json, Router,
 };
-use jsonwebtoken::{DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use jsonwebtoken::{decode, encode, DecodingKey, EncodingKey, Header, Validation};
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -17,6 +17,33 @@ use std::sync::Arc;
 
 mod config;
 mod log;
+
+/// 哈希密码
+fn hash_password(password: &str) -> anyhow::Result<String> {
+    bcrypt::hash(password, bcrypt::DEFAULT_COST)
+        .map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))
+}
+
+/// 验证密码
+fn verify_password(password: &str, hash: &str) -> bool {
+    bcrypt::verify(password, hash).unwrap_or(false)
+}
+
+/// 获取JWT secret，优先从环境变量读取
+fn get_jwt_secret() -> String {
+    std::env::var("JWT_SECRET")
+        .unwrap_or_else(|_| {
+            tracing::warn!("JWT_SECRET environment variable not set, using secret from config file. This is not recommended for production!");
+            // 从配置文件读取（作为后备方案）
+            config::AppConfig::load()
+                .ok()
+                .map(|cfg| cfg.auth.secret)
+                .unwrap_or_else(|| {
+                    tracing::error!("Failed to load JWT secret from config, using default (INSECURE!)");
+                    "insecure-default-secret-change-me".to_string()
+                })
+        })
+}
 
 // 输入限制常量
 const MAX_USERNAME_LENGTH: usize = 100;
@@ -215,11 +242,35 @@ async fn login(
 ) -> impl IntoResponse {
     tracing::info!("login attempt for username: {}", payload.username);
 
-    let auth = state.auth_config.read();
+    let (username, password_hash) = {
+        let auth = state.auth_config.read();
+        (auth.username.clone(), auth.password_hash.clone())
+    };
 
-    // 验证用户名和密码（配置文件中存储明文）
-    if payload.username != auth.username || payload.password != auth.password {
-        tracing::warn!("login failed for username: {}", payload.username);
+    // 验证用户名
+    if payload.username != username {
+        tracing::warn!(
+            "login failed for username: {} (user not found)",
+            payload.username
+        );
+        // 为了防止时序攻击，即使用户名不存在也进行哈希验证
+        let _ = verify_password(
+            &payload.password,
+            "$2b$12$dummy.hash.to.prevent.timing.attack.here",
+        );
+        return (
+            axum::http::StatusCode::UNAUTHORIZED,
+            Json(serde_json::json!({"error": "Invalid username or password"})),
+        )
+            .into_response();
+    }
+
+    // 验证密码哈希
+    if !verify_password(&payload.password, &password_hash) {
+        tracing::warn!(
+            "login failed for username: {} (incorrect password)",
+            payload.username
+        );
         return (
             axum::http::StatusCode::UNAUTHORIZED,
             Json(serde_json::json!({"error": "Invalid username or password"})),
@@ -239,10 +290,11 @@ async fn login(
         exp,
     };
 
+    let jwt_secret = get_jwt_secret();
     let token = encode(
         &Header::default(),
         &claims,
-        &EncodingKey::from_secret(auth.secret.as_bytes()),
+        &EncodingKey::from_secret(jwt_secret.as_bytes()),
     )
     .unwrap();
 
@@ -252,15 +304,12 @@ async fn login(
 
 // 验证 token 中间件
 async fn auth_middleware(
-    State(state): State<AppState>,
+    State(_state): State<AppState>,
     req: Request<axum::body::Body>,
     next: Next,
 ) -> axum::response::Response {
-    // 先读取 secret,然后释放锁
-    let secret = {
-        let auth = state.auth_config.read();
-        auth.secret.clone()
-    };
+    // 从环境变量读取 JWT secret
+    let secret = get_jwt_secret();
 
     // 从 header 获取 token
     let token = req
@@ -294,8 +343,8 @@ async fn change_password(
 
     let mut auth = state.auth_config.write();
 
-    // 验证旧密码（配置文件中存储明文）
-    if payload.old_password != auth.password {
+    // 验证旧密码（使用哈希验证）
+    if !verify_password(&payload.old_password, &auth.password_hash) {
         tracing::warn!("change_password failed: incorrect old password");
         return (
             axum::http::StatusCode::UNAUTHORIZED,
@@ -304,9 +353,22 @@ async fn change_password(
             .into_response();
     }
 
-    // 更新用户名和密码
+    // 哈希新密码
+    let new_password_hash = match hash_password(&payload.new_password) {
+        Ok(hash) => hash,
+        Err(e) => {
+            tracing::error!("failed to hash new password: {}", e);
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({"error": "Failed to process new password"})),
+            )
+                .into_response();
+        }
+    };
+
+    // 更新用户名和密码哈希
     auth.username = payload.new_username.clone();
-    auth.password = payload.new_password.clone();
+    auth.password_hash = new_password_hash;
 
     // 持久化到配置文件
     if let Err(e) = save_auth_config(&auth) {
@@ -341,9 +403,11 @@ fn save_auth_config(auth: &config::AuthConfig) -> anyhow::Result<()> {
             toml::Value::String(auth.username.clone()),
         );
         auth_section.insert(
-            "password".to_string(),
-            toml::Value::String(auth.password.clone()),
+            "password_hash".to_string(),
+            toml::Value::String(auth.password_hash.clone()),
         );
+        // 移除旧的明文密码字段（如果存在）
+        auth_section.remove("password");
     }
 
     // 写回文件

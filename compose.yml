@@ -9,6 +9,8 @@ services:
     ports:
       - "8080:8080"
     restart: unless-stopped
+    environment:
+      - JWT_SECRET=${JWT_SECRET:-change-me-to-a-strong-random-secret-in-production}
     volumes:
       - ./config:/app/config
       - ./data:/app/data
