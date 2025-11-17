@@ -1,4 +1,4 @@
-use tracing_subscriber::{fmt, prelude::*, EnvFilter};
+use tracing_subscriber::{fmt, fmt::format::FmtSpan, prelude::*, EnvFilter};
 
 use crate::config::LogConfig;
 
@@ -7,6 +7,7 @@ use crate::config::LogConfig;
 /// - 默认日志级别为 info
 /// - 可通过 `config.toml` 的 [log] 配置日志级别和日志文件
 /// - 同时输出到 stdout（方便 `docker logs`）和文件
+/// - 支持结构化日志，包含请求相关的上下文信息
 pub fn init_logging(cfg: &LogConfig) {
     // 从配置或环境变量构造日志过滤器
     let level = std::env::var("RUST_LOG").unwrap_or_else(|_| cfg.level.clone());
@@ -27,20 +28,28 @@ pub fn init_logging(cfg: &LogConfig) {
     );
     let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
-    // stdout 日志
+    // stdout 日志 - 更详细的格式，支持结构化字段
     let stdout_layer = fmt::layer()
         .with_target(true)
         .with_level(true)
         .with_thread_ids(true)
         .with_thread_names(true)
+        .with_span_events(FmtSpan::CLOSE)
         .with_ansi(false);
 
-    // 文件日志
-    let file_layer = fmt::layer().with_writer(non_blocking).with_ansi(false);
+    // 文件日志 - 包含更多详细信息
+    let file_layer = fmt::layer()
+        .with_writer(non_blocking)
+        .with_target(true)
+        .with_thread_ids(true)
+        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
+        .with_ansi(false);
 
     tracing_subscriber::registry()
         .with(env_filter)
         .with(stdout_layer)
         .with(file_layer)
         .init();
+
+    tracing::info!("Logging initialized with level: {}", cfg.level);
 }

@@ -13,9 +13,10 @@ pub async fn login(
     State(state): State<AppState>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    tracing::info!("login attempt for username: {}", payload.username);
+    let username = payload.username.clone();
+    tracing::info!(username = %username, "login attempt");
 
-    let (username, password_hash, jwt_secret) = {
+    let (config_username, password_hash, jwt_secret) = {
         let auth = state.auth_config.read();
         (
             auth.username.clone(),
@@ -25,12 +26,20 @@ pub async fn login(
     };
 
     // 验证用户名和密码
-    AuthService::verify_credentials(
+    match AuthService::verify_credentials(
         &payload.username,
         &payload.password,
-        &username,
+        &config_username,
         &password_hash,
-    )?;
+    ) {
+        Ok(()) => {
+            tracing::info!(username = %username, "credentials verified successfully");
+        }
+        Err(e) => {
+            tracing::warn!(username = %username, error = %e, "credentials verification failed");
+            return Err(e);
+        }
+    }
 
     // 生成 JWT token
     let exp = (std::time::SystemTime::now()
@@ -45,14 +54,23 @@ pub async fn login(
     };
 
     let jwt_secret = get_jwt_secret(jwt_secret);
-    let token = encode(
+    let token = match encode(
         &Header::default(),
         &claims,
         &EncodingKey::from_secret(jwt_secret.as_bytes()),
-    )
-    .map_err(|e| AppError::InternalError(format!("Failed to encode token: {}", e)))?;
+    ) {
+        Ok(token) => {
+            tracing::debug!(username = %username, token_length = token.len(), "JWT token generated");
+            token
+        }
+        Err(e) => {
+            let error_msg = format!("Failed to encode token: {}", e);
+            tracing::error!(username = %username, error = %error_msg, "JWT encoding failed");
+            return Err(AppError::InternalError(error_msg));
+        }
+    };
 
-    tracing::info!("login successful for username: {}", payload.username);
+    tracing::info!(username = %username, "login successful");
     Ok((StatusCode::OK, Json(LoginResponse { token })))
 }
 
@@ -61,7 +79,8 @@ pub async fn change_password(
     State(state): State<AppState>,
     Json(payload): Json<ChangePasswordRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    tracing::info!("change_password called");
+    let new_username = payload.new_username.clone();
+    tracing::info!(new_username = %new_username, "change_password request received");
 
     let (current_username, current_password_hash) = {
         let auth = state.auth_config.read();
@@ -69,25 +88,44 @@ pub async fn change_password(
     };
 
     // 验证旧密码并更新配置
-    let new_auth = AuthService::update_config(
+    tracing::debug!(current_username = %current_username, "verifying old password");
+    let new_auth = match AuthService::update_config(
         &payload.old_password,
         &payload.new_username,
         &payload.new_password,
         &current_username,
         &current_password_hash,
-    )?;
+    ) {
+        Ok(config) => {
+            tracing::info!(new_username = %new_username, "password update config validated");
+            config
+        }
+        Err(e) => {
+            tracing::warn!(new_username = %new_username, error = %e, "password update validation failed");
+            return Err(e);
+        }
+    };
 
     // 保存到文件
-    AuthService::save_config(&new_auth)?;
+    match AuthService::save_config(&new_auth) {
+        Ok(()) => {
+            tracing::info!(new_username = %new_username, "auth config persisted to file");
+        }
+        Err(e) => {
+            tracing::error!(new_username = %new_username, error = %e, "failed to persist auth config");
+            return Err(e);
+        }
+    }
 
     // 更新内存中的配置
     {
         let mut auth = state.auth_config.write();
-        auth.username = new_auth.username;
-        auth.password_hash = new_auth.password_hash;
+        auth.username = new_auth.username.clone();
+        auth.password_hash = new_auth.password_hash.clone();
+        tracing::debug!(new_username = %new_auth.username, "in-memory auth config updated");
     }
 
-    tracing::info!("password changed successfully");
+    tracing::info!(new_username = %new_username, "password changed successfully");
     Ok((
         StatusCode::OK,
         Json(serde_json::json!({"message": "Password changed successfully"})),

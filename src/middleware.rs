@@ -20,19 +20,40 @@ pub async fn auth_middleware(req: Request, next: Next) -> Result<Response, Statu
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.strip_prefix("Bearer "));
 
+    let uri = req.uri().to_string();
+    let method = req.method().to_string();
+
     if let Some(token) = token {
         match decode::<Claims>(
             token,
             &DecodingKey::from_secret(secret.as_bytes()),
             &Validation::default(),
         ) {
-            Ok(_) => {
+            Ok(decoded) => {
+                let username = &decoded.claims.sub;
+                tracing::debug!(
+                    username = %username,
+                    method = %method,
+                    uri = %uri,
+                    "token validation successful"
+                );
                 return Ok(next.run(req).await);
             }
             Err(e) => {
-                tracing::warn!("token validation failed: {}", e);
+                tracing::warn!(
+                    method = %method,
+                    uri = %uri,
+                    error = %e,
+                    "token validation failed"
+                );
             }
         }
+    } else {
+        tracing::warn!(
+            method = %method,
+            uri = %uri,
+            "no token provided in authorization header"
+        );
     }
 
     Err(StatusCode::UNAUTHORIZED)

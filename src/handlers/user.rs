@@ -18,21 +18,39 @@ pub async fn create_user(
     State(state): State<AppState>,
     Json(payload): Json<CreateRequest>,
 ) -> Result<impl IntoResponse, AppError> {
+    let username = payload.username.clone();
     tracing::info!(
-        "create_user called: username = {}, url_count = {}, allow_overwrite = {}",
-        payload.username,
-        payload.urls.len(),
-        payload.allow_overwrite
+        username = %username,
+        url_count = payload.urls.len(),
+        allow_overwrite = payload.allow_overwrite,
+        "create_user request received"
     );
 
     // 验证用户名
-    let username = UrlService::validate_username(&payload.username)?;
+    let username = match UrlService::validate_username(&payload.username) {
+        Ok(u) => {
+            tracing::debug!(username = %u, "username validated successfully");
+            u
+        }
+        Err(e) => {
+            tracing::warn!(username = %payload.username, error = %e, "username validation failed");
+            return Err(e);
+        }
+    };
 
     // 验证 URL 列表
     let (valid_urls, rejected_urls) =
         UrlService::validate_urls_with_rejection(payload.urls, &username);
 
+    tracing::debug!(
+        username = %username,
+        valid_count = valid_urls.len(),
+        rejected_count = rejected_urls.len(),
+        "URL validation completed"
+    );
+
     if valid_urls.is_empty() {
+        tracing::warn!(username = %username, "no valid URLs provided");
         return Err(AppError::ValidationError(
             "No valid URLs provided".to_string(),
         ));
@@ -44,8 +62,8 @@ pub async fn create_user(
 
         if map.contains_key(&username) && !payload.allow_overwrite {
             tracing::warn!(
-                "user '{}' already exists and allow_overwrite is false, rejecting request",
-                username
+                username = %username,
+                "user already exists and allow_overwrite is false"
             );
             return Err(AppError::Conflict(format!(
                 "User '{}' already exists",
@@ -55,9 +73,13 @@ pub async fn create_user(
 
         // 如果是新用户，分配新的 order；如果是覆盖，保留原 order
         let order = if let Some(existing) = map.get(&username) {
-            existing.order
+            let old_order = existing.order;
+            tracing::debug!(username = %username, order = old_order, "preserving existing order");
+            old_order
         } else {
-            map.values().map(|d| d.order).max().unwrap_or(0) + 1
+            let new_order = map.values().map(|d| d.order).max().unwrap_or(0) + 1;
+            tracing::debug!(username = %username, order = new_order, "assigned new order");
+            new_order
         };
 
         map.insert(
@@ -71,14 +93,20 @@ pub async fn create_user(
 
     // 同步持久化
     let data_service = DataService::new(state.store.clone(), state.data_file_path.clone());
-    data_service.persist()?;
-
-    tracing::info!(
-        "user link updated: username = {}, accepted = {}, rejected = {}",
-        username,
-        valid_urls.len(),
-        rejected_urls.len()
-    );
+    match data_service.persist() {
+        Ok(()) => {
+            tracing::info!(
+                username = %username,
+                accepted_count = valid_urls.len(),
+                rejected_count = rejected_urls.len(),
+                "user link created/updated and persisted successfully"
+            );
+        }
+        Err(e) => {
+            tracing::error!(username = %username, error = %e, "failed to persist user data");
+            return Err(e);
+        }
+    }
 
     let response = CreateResponse {
         username: username.clone(),
@@ -103,27 +131,34 @@ pub async fn get_user_info(
     State(state): State<AppState>,
     Path(username): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    tracing::info!("get_user_info called: username = {}", username);
+    tracing::debug!(username = %username, "get_user_info request received");
 
     let map = state.store.read();
     if let Some(user_data) = map.get(&username) {
+        tracing::debug!(
+            username = %username,
+            url_count = user_data.urls.len(),
+            "user info retrieved successfully"
+        );
         let body = Json(InfoResponse {
             username,
             urls: user_data.urls.clone(),
         });
         Ok((StatusCode::OK, body).into_response())
     } else {
+        tracing::warn!(username = %username, "user not found");
         Err(AppError::NotFound(format!("User '{}' not found", username)))
     }
 }
 
 /// 获取所有用户列表
 pub async fn list_users(State(state): State<AppState>) -> impl IntoResponse {
-    tracing::info!("list_users called");
+    tracing::debug!("list_users request received");
 
     let data_service = DataService::new(state.store.clone(), state.data_file_path.clone());
     let users = data_service.get_all_users();
 
+    tracing::info!(user_count = users.len(), "user list retrieved successfully");
     Json(UsersResponse { users })
 }
 
@@ -132,7 +167,7 @@ pub async fn delete_user(
     State(state): State<AppState>,
     Path(username): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    tracing::info!("delete_user called: username = {}", username);
+    tracing::info!(username = %username, "delete_user request received");
 
     let removed = {
         let mut map = state.store.write();
@@ -140,14 +175,22 @@ pub async fn delete_user(
     };
 
     if !removed {
+        tracing::warn!(username = %username, "user not found for deletion");
         return Err(AppError::NotFound(format!("User '{}' not found", username)));
     }
 
     // 同步持久化
     let data_service = DataService::new(state.store.clone(), state.data_file_path.clone());
-    data_service.persist()?;
+    match data_service.persist() {
+        Ok(()) => {
+            tracing::info!(username = %username, "user deleted and persisted successfully");
+        }
+        Err(e) => {
+            tracing::error!(username = %username, error = %e, "failed to persist after deletion");
+            return Err(e);
+        }
+    }
 
-    tracing::info!("user deleted: {}", username);
     Ok((StatusCode::OK, Json(serde_json::json!({}))))
 }
 
@@ -156,23 +199,36 @@ pub async fn reorder_users(
     State(state): State<AppState>,
     Json(payload): Json<ReorderRequest>,
 ) -> Result<impl IntoResponse, AppError> {
-    tracing::info!("reorder_users called: {} users", payload.usernames.len());
+    tracing::info!(
+        user_count = payload.usernames.len(),
+        "reorder_users request received"
+    );
 
     {
         let mut map = state.store.write();
         for (new_order, username) in payload.usernames.iter().enumerate() {
             if let Some(user_data) = map.get_mut(username) {
-                user_data.order = new_order + 1;
-                tracing::debug!("updated order for {}: {}", username, new_order + 1);
+                let order_value = new_order + 1;
+                user_data.order = order_value;
+                tracing::debug!(username = %username, order = order_value, "order updated");
+            } else {
+                tracing::warn!(username = %username, "user not found during reorder");
             }
         }
     }
 
     // 持久化
     let data_service = DataService::new(state.store.clone(), state.data_file_path.clone());
-    data_service.persist()?;
+    match data_service.persist() {
+        Ok(()) => {
+            tracing::info!("user reorder persisted successfully");
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "failed to persist reorder");
+            return Err(e);
+        }
+    }
 
-    tracing::info!("user order updated successfully");
     Ok((
         StatusCode::OK,
         Json(serde_json::json!({
@@ -186,19 +242,24 @@ pub async fn redirect_short(
     State(state): State<AppState>,
     Path(username): Path<String>,
 ) -> Result<impl IntoResponse, AppError> {
-    tracing::info!("redirect_short called: username = {}", username);
+    tracing::info!(username = %username, "redirect_short request received");
 
     let urls = {
         let map = state.store.read();
         if let Some(user_data) = map.get(&username) {
+            tracing::debug!(
+                username = %username,
+                url_count = user_data.urls.len(),
+                "user found with URLs"
+            );
             user_data.urls.clone()
         } else {
-            tracing::info!("user not found: {}", username);
+            tracing::warn!(username = %username, "user not found");
             return Err(AppError::NotFound(format!("User '{}' not found", username)));
         }
     };
 
-    let client = reqwest::Client::builder()
+    let client = match reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .connect_timeout(Duration::from_secs(10))
         .user_agent("sub/0.1")
@@ -206,9 +267,14 @@ pub async fn redirect_short(
         .tcp_keepalive(Duration::from_secs(60))
         .pool_idle_timeout(Duration::from_secs(90))
         .build()
-        .map_err(|e| {
-            AppError::ExternalServiceError(format!("Failed to build HTTP client: {}", e))
-        })?;
+    {
+        Ok(c) => c,
+        Err(e) => {
+            let error_msg = format!("Failed to build HTTP client: {}", e);
+            tracing::error!(username = %username, error = %error_msg, "HTTP client build failed");
+            return Err(AppError::ExternalServiceError(error_msg));
+        }
+    };
 
     // 并发抓取所有 URL，每个 URL 最多重试 2 次
     const MAX_RETRIES: usize = 2;
@@ -216,6 +282,14 @@ pub async fn redirect_short(
 
     let client = std::sync::Arc::new(client);
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT));
+
+    tracing::debug!(
+        username = %username,
+        url_count = urls.len(),
+        max_concurrent = MAX_CONCURRENT,
+        max_retries = MAX_RETRIES,
+        "starting concurrent URL fetches"
+    );
 
     let fetch_tasks: Vec<_> = urls
         .iter()
@@ -238,16 +312,16 @@ pub async fn redirect_short(
                                 Ok(text) => {
                                     if attempt > 1 {
                                         tracing::info!(
-                                            "fetched content from {} ({} bytes, succeeded on attempt {})",
-                                            url,
-                                            text.len(),
-                                            attempt
+                                            url = %url,
+                                            content_size = text.len(),
+                                            attempt = attempt,
+                                            "URL fetched successfully (with retry)"
                                         );
                                     } else {
                                         tracing::debug!(
-                                            "fetched content from {} ({} bytes)",
-                                            url,
-                                            text.len()
+                                            url = %url,
+                                            content_size = text.len(),
+                                            "URL fetched successfully"
                                         );
                                     }
                                     return Some(text);
@@ -267,15 +341,21 @@ pub async fn redirect_short(
 
                     if attempt <= MAX_RETRIES {
                         let backoff_ms = 200 * (1 << (attempt - 1));
+                        tracing::debug!(
+                            url = %url,
+                            attempt = attempt,
+                            backoff_ms = backoff_ms,
+                            "retrying after backoff"
+                        );
                         tokio::time::sleep(Duration::from_millis(backoff_ms)).await;
                     }
                 }
 
                 tracing::warn!(
-                    "failed to fetch {} after {} attempts, last error: {}",
-                    url,
-                    MAX_RETRIES + 1,
-                    last_error
+                    url = %url,
+                    attempts = MAX_RETRIES + 1,
+                    error = %last_error,
+                    "failed to fetch URL after all retries"
                 );
                 None
             })
@@ -290,17 +370,23 @@ pub async fn redirect_short(
         .collect();
 
     if bodies.is_empty() {
-        tracing::warn!("no content fetched for user: {}", username);
+        tracing::error!(
+            username = %username,
+            total_urls = urls.len(),
+            successful = bodies.len(),
+            "all URL fetches failed"
+        );
         return Err(AppError::ExternalServiceError(
             "Failed to fetch content from provided URLs".to_string(),
         ));
     }
 
     tracing::info!(
-        "successfully fetched {}/{} URLs for user: {}",
-        bodies.len(),
-        urls.len(),
-        username
+        username = %username,
+        successful_count = bodies.len(),
+        total_count = urls.len(),
+        combined_size = bodies.iter().map(|b| b.len()).sum::<usize>(),
+        "URL fetching completed successfully"
     );
 
     let combined_content = bodies.join("\n");

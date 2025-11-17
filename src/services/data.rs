@@ -22,15 +22,38 @@ impl DataService {
     pub fn load(&self) -> AppResult<()> {
         let path = &self.data_file_path;
         if !std::path::Path::new(path).exists() {
-            tracing::info!("data file not found, starting with empty store");
+            tracing::info!(file = %path, "data file not found, starting with empty store");
             return Ok(());
         }
 
-        let content = std::fs::read_to_string(path)?;
-        let data: toml::Value = toml::from_str(&content)?;
+        tracing::debug!(file = %path, "loading data from file");
+
+        let content = match std::fs::read_to_string(path) {
+            Ok(c) => {
+                tracing::debug!(file = %path, size_bytes = c.len(), "data file read successfully");
+                c
+            }
+            Err(e) => {
+                tracing::error!(file = %path, error = %e, "failed to read data file");
+                return Err(e.into());
+            }
+        };
+
+        let data: toml::Value = match toml::from_str(&content) {
+            Ok(d) => {
+                tracing::debug!(file = %path, "TOML parsing successful");
+                d
+            }
+            Err(e) => {
+                tracing::error!(file = %path, error = %e, "failed to parse TOML");
+                return Err(e.into());
+            }
+        };
 
         if let Some(links) = data.get("links").and_then(|v| v.as_array()) {
             let mut map = self.store.write();
+            let mut loaded_count = 0;
+
             for (index, link) in links.iter().enumerate() {
                 if let (Some(username), Some(urls)) = (
                     link.get("username").and_then(|v| v.as_str()),
@@ -51,15 +74,25 @@ impl DataService {
                         map.insert(
                             username.to_string(),
                             UserData {
-                                urls: url_list,
+                                urls: url_list.clone(),
                                 order,
                             },
                         );
-                        tracing::info!("loaded user: {} (order: {})", username, order);
+                        loaded_count += 1;
+                        tracing::debug!(
+                            username = %username,
+                            order = order,
+                            url_count = url_list.len(),
+                            "user loaded from file"
+                        );
                     }
                 }
             }
-            tracing::info!("loaded {} users from data file", map.len());
+            tracing::info!(
+                file = %path,
+                loaded_users = loaded_count,
+                "data loading completed"
+            );
         }
 
         Ok(())
@@ -91,20 +124,77 @@ impl DataService {
 
         let path = &self.data_file_path;
         if let Some(parent) = std::path::Path::new(path).parent() {
-            std::fs::create_dir_all(parent)?;
+            if let Err(e) = std::fs::create_dir_all(parent) {
+                tracing::error!(
+                    parent_dir = %parent.display(),
+                    error = %e,
+                    "failed to create parent directories"
+                );
+                return Err(e.into());
+            }
         }
 
         // 使用临时文件写入，然后原子性地 rename
         let tmp_path = format!("{}.tmp.{}", path, std::process::id());
-        {
-            let mut file = std::fs::File::create(&tmp_path)?;
-            file.write_all(toml.as_bytes())?;
-            file.sync_all()?; // 确保数据刷新到磁盘
+        tracing::debug!(
+            target_file = %path,
+            temp_file = %tmp_path,
+            content_size = toml.len(),
+            "writing data to temporary file"
+        );
+
+        match std::fs::File::create(&tmp_path) {
+            Ok(mut file) => {
+                if let Err(e) = file.write_all(toml.as_bytes()) {
+                    tracing::error!(
+                        temp_file = %tmp_path,
+                        error = %e,
+                        "failed to write to temporary file"
+                    );
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return Err(e.into());
+                }
+                if let Err(e) = file.sync_all() {
+                    tracing::error!(
+                        temp_file = %tmp_path,
+                        error = %e,
+                        "failed to sync file to disk"
+                    );
+                    let _ = std::fs::remove_file(&tmp_path);
+                    return Err(e.into());
+                }
+            }
+            Err(e) => {
+                tracing::error!(
+                    temp_file = %tmp_path,
+                    error = %e,
+                    "failed to create temporary file"
+                );
+                return Err(e.into());
+            }
         }
 
         // 原子性地替换目标文件
-        std::fs::rename(&tmp_path, path)?;
-        Ok(())
+        match std::fs::rename(&tmp_path, path) {
+            Ok(()) => {
+                tracing::info!(
+                    file = %path,
+                    user_count = map.len(),
+                    "data persisted successfully"
+                );
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!(
+                    temp_file = %tmp_path,
+                    target_file = %path,
+                    error = %e,
+                    "failed to rename temporary file to target"
+                );
+                let _ = std::fs::remove_file(&tmp_path);
+                Err(e.into())
+            }
+        }
     }
 
     /// 获取所有用户信息

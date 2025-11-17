@@ -66,9 +66,30 @@ impl AuthService {
 
     /// 保存认证配置到文件
     pub fn save_config(auth: &config::AuthConfig) -> AppResult<()> {
+        tracing::debug!(username = %auth.username, "saving auth config to file");
+
         // 读取现有配置
-        let content = std::fs::read_to_string("config/config.toml")?;
-        let mut config: toml::Value = toml::from_str(&content)?;
+        let content = match std::fs::read_to_string("config/config.toml") {
+            Ok(c) => {
+                tracing::debug!("config.toml read successfully");
+                c
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to read config.toml");
+                return Err(e.into());
+            }
+        };
+
+        let mut config: toml::Value = match toml::from_str(&content) {
+            Ok(c) => {
+                tracing::debug!("config.toml parsed successfully");
+                c
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to parse config.toml");
+                return Err(e.into());
+            }
+        };
 
         // 更新 auth 部分
         if let Some(auth_section) = config.get_mut("auth").and_then(|v| v.as_table_mut()) {
@@ -82,15 +103,38 @@ impl AuthService {
             );
             // 移除旧的明文密码字段（如果存在）
             auth_section.remove("password");
+            tracing::debug!(username = %auth.username, "auth config updated in memory");
         }
 
         // 写回文件
-        let toml_string = toml::to_string_pretty(&config)?;
-        let mut file = std::fs::File::create("config/config.toml")?;
-        file.write_all(toml_string.as_bytes())?;
-        file.sync_all()?;
+        let toml_string = match toml::to_string_pretty(&config) {
+            Ok(s) => {
+                tracing::debug!(size_bytes = s.len(), "TOML serialized successfully");
+                s
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to serialize TOML");
+                return Err(e.into());
+            }
+        };
 
-        tracing::info!("auth config saved successfully");
-        Ok(())
+        match std::fs::File::create("config/config.toml") {
+            Ok(mut file) => {
+                if let Err(e) = file.write_all(toml_string.as_bytes()) {
+                    tracing::error!(error = %e, "failed to write to config.toml");
+                    return Err(e.into());
+                }
+                if let Err(e) = file.sync_all() {
+                    tracing::error!(error = %e, "failed to sync config.toml to disk");
+                    return Err(e.into());
+                }
+                tracing::info!(username = %auth.username, "auth config saved successfully");
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "failed to create config.toml");
+                Err(e.into())
+            }
+        }
     }
 }
