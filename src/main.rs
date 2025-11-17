@@ -355,6 +355,20 @@ fn save_auth_config(auth: &config::AuthConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// 健康检查接口
+async fn healthz() -> impl IntoResponse {
+    (
+        axum::http::StatusCode::OK,
+        Json(serde_json::json!({
+            "status": "healthy",
+            "timestamp": std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        })),
+    )
+}
+
 async fn index() -> impl IntoResponse {
     match tokio::fs::read_to_string("web/index.html").await {
         Ok(content) => (axum::http::StatusCode::OK, axum::response::Html(content)).into_response(),
@@ -966,6 +980,7 @@ async fn main() {
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/healthz", get(healthz))
         .route("/api/login", post(login))
         .route("/api/info/{code}", get(info))
         .route("/{code}", get(redirect_short))
