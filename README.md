@@ -1,8 +1,9 @@
 ```
 services:
   web:
-    image: ghcr.io/vansour/v-ui:latest
-    container_name: v-ui
+    image: ghcr.io/vansour/sub:latest
+    container_name: sub
+    hostname: localhost
     ports:
       - "8080:8080"
     restart: unless-stopped

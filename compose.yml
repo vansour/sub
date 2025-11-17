@@ -2,9 +2,10 @@ services:
   web:
     image: ghcr.io/vansour/sub:latest
     container_name: sub
+    hostname: localhost
     build:
       context: .
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile.alpine
     ports:
       - "8080:8080"
     restart: unless-stopped
