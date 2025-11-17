@@ -5,12 +5,14 @@ use axum::{
     routing::{delete, get, post},
     Router,
 };
+use lazy_static::lazy_static;
 use parking_lot::RwLock;
 
 mod config;
 mod errors;
 mod handlers;
 mod log;
+mod metrics;
 mod middleware;
 mod models;
 mod services;
@@ -18,6 +20,12 @@ mod utils;
 
 use models::UserData;
 use services::DataService;
+
+lazy_static! {
+    /// 全局 Prometheus 指标注册表
+    pub static ref METRICS_REGISTRY: parking_lot::Mutex<prometheus::Registry> =
+        parking_lot::Mutex::new(metrics::init_metrics());
+}
 
 /// 应用状态
 #[derive(Clone)]
@@ -71,12 +79,15 @@ async fn main() {
     let app = Router::new()
         .route("/", get(handlers::index))
         .route("/healthz", get(handlers::healthz))
+        .route("/health", get(handlers::health_detailed))
+        .route("/metrics", get(handlers::metrics))
         .route("/favicon.ico", get(handlers::favicon))
         .route("/api/login", post(handlers::login))
         .route("/api/info/:username", get(handlers::get_user_info))
         .route("/:username", get(handlers::redirect_short))
         .merge(protected_routes)
         .nest_service("/static", tower_http::services::ServeDir::new("web"))
+        .layer(axum_middleware::from_fn(middleware::metrics_middleware))
         .with_state(state);
 
     tracing::info!("Listening on {}", addr);

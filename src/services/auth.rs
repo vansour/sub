@@ -1,5 +1,6 @@
 use crate::config;
 use crate::errors::{AppError, AppResult};
+use crate::metrics;
 use crate::utils::{hash_password, verify_password};
 use std::io::Write;
 
@@ -18,6 +19,7 @@ impl AuthService {
             tracing::warn!("login failed for username: {} (user not found)", username);
             // 为了防止时序攻击，即使用户名不存在也进行哈希验证
             let _ = verify_password(password, "$2b$12$dummy.hash.to.prevent.timing.attack.here");
+            metrics::record_auth_attempt(false);
             return Err(AppError::AuthenticationError(
                 "Invalid username or password".to_string(),
             ));
@@ -29,12 +31,14 @@ impl AuthService {
                 "login failed for username: {} (incorrect password)",
                 username
             );
+            metrics::record_auth_attempt(false);
             return Err(AppError::AuthenticationError(
                 "Invalid username or password".to_string(),
             ));
         }
 
         tracing::info!("login successful for username: {}", username);
+        metrics::record_auth_attempt(true);
         Ok(())
     }
 

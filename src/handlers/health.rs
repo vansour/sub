@@ -1,10 +1,12 @@
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use axum::Json;
+use std::time::Instant;
 
+use crate::metrics::{self, CheckResult, HealthChecks, HealthStatus};
 use crate::models::ApiResponse;
 
-/// 健康检查接口
+/// 简单健康检查接口（轻量级）
 pub async fn healthz() -> impl IntoResponse {
     (
         StatusCode::OK,
@@ -12,6 +14,98 @@ pub async fn healthz() -> impl IntoResponse {
             "系统正常",
         )),
     )
+}
+
+/// 详细健康检查接口（包含诊断信息）
+pub async fn health_detailed() -> impl IntoResponse {
+    let start = Instant::now();
+    let mut overall_status = "healthy";
+
+    // 检查数据存储
+    let storage_check = check_data_storage().await;
+    if storage_check.status != "healthy" {
+        overall_status = "degraded";
+    }
+
+    // 检查系统资源
+    let resources_check = check_system_resources().await;
+    if resources_check.status != "healthy" {
+        overall_status = "degraded";
+    }
+
+    let health_status = HealthStatus {
+        status: overall_status.to_string(),
+        timestamp: chrono::Local::now().to_rfc3339(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        checks: HealthChecks {
+            data_storage: storage_check,
+            system_resources: resources_check,
+        },
+    };
+
+    let duration = start.elapsed().as_secs_f64();
+    let status_code = match overall_status {
+        "healthy" => StatusCode::OK,
+        _ => StatusCode::SERVICE_UNAVAILABLE,
+    };
+
+    metrics::record_http_request("GET", "/health", status_code.as_u16(), duration);
+
+    (status_code, Json(ApiResponse::success(health_status)))
+}
+
+/// 检查数据存储状态
+async fn check_data_storage() -> CheckResult {
+    let start = Instant::now();
+
+    // 尝试检查配置文件是否可访问
+    match tokio::fs::metadata("data/data.toml").await {
+        Ok(_) => CheckResult::ok(start.elapsed().as_millis() as u64),
+        Err(e) => CheckResult::unhealthy(
+            format!("Failed to access data storage: {}", e),
+            start.elapsed().as_millis() as u64,
+        ),
+    }
+}
+
+/// 检查系统资源
+async fn check_system_resources() -> CheckResult {
+    let start = Instant::now();
+
+    // 检查内存使用
+    #[cfg(target_os = "linux")]
+    {
+        match std::fs::read_to_string("/proc/self/status") {
+            Ok(status_content) => {
+                // 解析 VmRSS（实际内存占用）
+                for line in status_content.lines() {
+                    if line.starts_with("VmRSS:") {
+                        // 如果内存占用超过 1GB，标记为不健康
+                        if let Some(size_str) = line.split_whitespace().nth(1) {
+                            if let Ok(size_kb) = size_str.parse::<u64>() {
+                                if size_kb > 1024 * 1024 {
+                                    return CheckResult::unhealthy(
+                                        format!("High memory usage: {} KB", size_kb),
+                                        start.elapsed().as_millis() as u64,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                CheckResult::ok(start.elapsed().as_millis() as u64)
+            }
+            Err(e) => CheckResult::unhealthy(
+                format!("Failed to check system resources: {}", e),
+                start.elapsed().as_millis() as u64,
+            ),
+        }
+    }
+
+    #[cfg(not(target_os = "linux"))]
+    {
+        CheckResult::ok(start.elapsed().as_millis() as u64)
+    }
 }
 
 /// 处理 favicon.ico 请求

@@ -24,3 +24,5 @@ futures = "0.3.31"
 jsonwebtoken = { version = "10.2.0", default-features = false, features = ["aws_lc_rs"] }
 bcrypt = "0.15"
 chrono = "0.4"
+prometheus = "0.13"
+lazy_static = "1.4"

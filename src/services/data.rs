@@ -1,9 +1,11 @@
 use crate::errors::AppResult;
+use crate::metrics;
 use crate::models::{UserData, UserInfo};
 use parking_lot::RwLock;
 use std::collections::HashMap;
 use std::io::Write;
 use std::sync::Arc;
+use std::time::Instant;
 
 pub struct DataService {
     store: Arc<RwLock<HashMap<String, UserData>>>,
@@ -20,9 +22,11 @@ impl DataService {
 
     /// 从 data.toml 加载数据到内存
     pub fn load(&self) -> AppResult<()> {
+        let start = Instant::now();
         let path = &self.data_file_path;
         if !std::path::Path::new(path).exists() {
             tracing::info!(file = %path, "data file not found, starting with empty store");
+            metrics::record_db_operation("load_data", true, start.elapsed().as_secs_f64());
             return Ok(());
         }
 
@@ -35,6 +39,7 @@ impl DataService {
             }
             Err(e) => {
                 tracing::error!(file = %path, error = %e, "failed to read data file");
+                metrics::record_db_operation("load_data", false, start.elapsed().as_secs_f64());
                 return Err(e.into());
             }
         };
@@ -46,6 +51,7 @@ impl DataService {
             }
             Err(e) => {
                 tracing::error!(file = %path, error = %e, "failed to parse TOML");
+                metrics::record_db_operation("load_data", false, start.elapsed().as_secs_f64());
                 return Err(e.into());
             }
         };
@@ -64,7 +70,6 @@ impl DataService {
                         .filter_map(|u| u.as_str().map(String::from))
                         .collect();
                     if !url_list.is_empty() {
-                        // 读取 order 字段，如果不存在则使用索引
                         let order = link
                             .get("order")
                             .and_then(|v| v.as_integer())
@@ -95,16 +100,17 @@ impl DataService {
             );
         }
 
+        metrics::record_db_operation("load_data", true, start.elapsed().as_secs_f64());
         Ok(())
     }
 
     /// 将内存中的短链映射写入 data.toml
     /// 使用临时文件 + 原子 rename 确保数据完整性
     pub fn persist(&self) -> AppResult<()> {
+        let start = Instant::now();
         let map = self.store.read();
         let mut items: Vec<(String, UserData)> =
             map.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        // 按 order 排序
         items.sort_by_key(|(_, data)| data.order);
 
         let mut toml = String::new();
@@ -130,11 +136,11 @@ impl DataService {
                     error = %e,
                     "failed to create parent directories"
                 );
+                metrics::record_db_operation("persist_data", false, start.elapsed().as_secs_f64());
                 return Err(e.into());
             }
         }
 
-        // 使用临时文件写入，然后原子性地 rename
         let tmp_path = format!("{}.tmp.{}", path, std::process::id());
         tracing::debug!(
             target_file = %path,
@@ -152,6 +158,11 @@ impl DataService {
                         "failed to write to temporary file"
                     );
                     let _ = std::fs::remove_file(&tmp_path);
+                    metrics::record_db_operation(
+                        "persist_data",
+                        false,
+                        start.elapsed().as_secs_f64(),
+                    );
                     return Err(e.into());
                 }
                 if let Err(e) = file.sync_all() {
@@ -161,6 +172,11 @@ impl DataService {
                         "failed to sync file to disk"
                     );
                     let _ = std::fs::remove_file(&tmp_path);
+                    metrics::record_db_operation(
+                        "persist_data",
+                        false,
+                        start.elapsed().as_secs_f64(),
+                    );
                     return Err(e.into());
                 }
             }
@@ -170,11 +186,11 @@ impl DataService {
                     error = %e,
                     "failed to create temporary file"
                 );
+                metrics::record_db_operation("persist_data", false, start.elapsed().as_secs_f64());
                 return Err(e.into());
             }
         }
 
-        // 原子性地替换目标文件
         match std::fs::rename(&tmp_path, path) {
             Ok(()) => {
                 tracing::info!(
@@ -182,6 +198,7 @@ impl DataService {
                     user_count = map.len(),
                     "data persisted successfully"
                 );
+                metrics::record_db_operation("persist_data", true, start.elapsed().as_secs_f64());
                 Ok(())
             }
             Err(e) => {
@@ -192,6 +209,7 @@ impl DataService {
                     "failed to rename temporary file to target"
                 );
                 let _ = std::fs::remove_file(&tmp_path);
+                metrics::record_db_operation("persist_data", false, start.elapsed().as_secs_f64());
                 Err(e.into())
             }
         }
@@ -212,7 +230,6 @@ impl DataService {
                 )
             })
             .collect();
-        // 按 order 排序
         users.sort_by_key(|(order, _)| *order);
         users.into_iter().map(|(_, user)| user).collect()
     }

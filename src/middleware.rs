@@ -1,3 +1,4 @@
+use crate::metrics;
 use crate::models::Claims;
 use crate::utils::get_jwt_secret;
 use axum::{
@@ -57,4 +58,23 @@ pub async fn auth_middleware(req: Request, next: Next) -> Result<Response, Statu
     }
 
     Err(StatusCode::UNAUTHORIZED)
+}
+
+/// 记录 HTTP 请求指标的中间件
+pub async fn metrics_middleware(req: Request, next: Next) -> Response {
+    let method = req.method().to_string();
+    let path = req.uri().path().to_string();
+
+    metrics::inc_http_requests_in_flight(&method, &path);
+    let start = std::time::Instant::now();
+
+    let response = next.run(req).await;
+
+    let duration = start.elapsed().as_secs_f64();
+    let status_code = response.status().as_u16();
+
+    metrics::record_http_request(&method, &path, status_code, duration);
+    metrics::dec_http_requests_in_flight(&method, &path);
+
+    response
 }
