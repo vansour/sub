@@ -197,14 +197,41 @@ impl Database {
         &self,
         order_map: &std::collections::HashMap<String, i64>,
     ) -> anyhow::Result<()> {
-        let mut tx = self.pool.begin().await?;
+        if order_map.is_empty() {
+            return Ok(());
+        }
 
-        for (username, new_order) in order_map.iter() {
-            sqlx::query("UPDATE users SET order_index = ?1, updated_at = CURRENT_TIMESTAMP WHERE username = ?2")
-                .bind(new_order)
-                .bind(username)
-                .execute(&mut *tx)
-                .await?;
+        let mut tx = self.pool.begin().await?;
+        let now = chrono::Utc::now().timestamp();
+
+        // 批量更新：使用 CASE WHEN 语句一次性更新所有记录
+        let usernames: Vec<&String> = order_map.keys().collect();
+        let mut case_clauses = Vec::new();
+
+        for username in &usernames {
+            if let Some(order) = order_map.get(*username) {
+                case_clauses.push(format!(
+                    "WHEN username = '{}' THEN {}",
+                    username.replace("'", "''"),
+                    order
+                ));
+            }
+        }
+
+        if !case_clauses.is_empty() {
+            let case_sql = case_clauses.join(" ");
+            let sql = format!(
+                "UPDATE users SET order_index = CASE {} END, updated_at = {} WHERE username IN ({})",
+                case_sql,
+                now,
+                usernames
+                    .iter()
+                    .map(|u| format!("'{}'", u.replace("'", "''")))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+
+            sqlx::query(&sql).execute(&mut *tx).await?;
         }
 
         tx.commit().await?;

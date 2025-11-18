@@ -91,9 +91,19 @@ pub fn is_valid_username(username: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 验证 URL 是否有效
+/// 验证 URL 是否有效（无安全配置）
 /// 检查: scheme 必须是 http/https, 长度限制, 不能为空白, 不包含危险字符
+#[allow(dead_code)]
 pub fn is_valid_url(url: &str) -> bool {
+    is_valid_url_with_security(url, false, false)
+}
+
+/// 验证 URL 是否有效（带安全配置）
+pub fn is_valid_url_with_security(
+    url: &str,
+    allow_localhost: bool,
+    allow_private_ips: bool,
+) -> bool {
     // 检查长度
     if url.len() < MIN_URL_LENGTH || url.len() > MAX_URL_LENGTH {
         return false;
@@ -127,16 +137,6 @@ pub fn is_valid_url(url: &str) -> bool {
         // 检查 host 是否为 localhost 或私有 IP（防止 SSRF 攻击）
         if let Some(host) = parsed.host_str() {
             let host_lower = host.to_lowercase();
-
-            // 检查环境变量配置（默认阻止）
-            let allow_localhost = std::env::var("ALLOW_LOCALHOST")
-                .unwrap_or_else(|_| "false".to_string())
-                .to_lowercase()
-                == "true";
-            let allow_private_ips = std::env::var("ALLOW_PRIVATE_IPS")
-                .unwrap_or_else(|_| "false".to_string())
-                .to_lowercase()
-                == "true";
 
             // 阻止访问 localhost（除非明确允许）
             if !allow_localhost
@@ -181,7 +181,11 @@ pub fn is_valid_url(url: &str) -> bool {
 
 /// 验证并清洗 URL 列表
 /// 返回去重后的有效 URL 和被拒绝的 URL 列表
-pub fn validate_and_sanitize_urls(urls: Vec<String>) -> UrlValidationResult {
+pub fn validate_and_sanitize_urls(
+    urls: Vec<String>,
+    allow_localhost: bool,
+    allow_private_ips: bool,
+) -> UrlValidationResult {
     let mut valid_urls = Vec::new();
     let mut rejected = Vec::new();
     let mut seen = std::collections::HashSet::new();
@@ -225,7 +229,7 @@ pub fn validate_and_sanitize_urls(urls: Vec<String>) -> UrlValidationResult {
         }
 
         // 验证 URL 格式
-        if !is_valid_url(&trimmed) {
+        if !is_valid_url_with_security(&trimmed, allow_localhost, allow_private_ips) {
             rejected.push(RejectedUrl {
                 url: trimmed.clone(),
                 reason: "Invalid URL format or unsupported scheme (must be http/https)".to_string(),
@@ -313,35 +317,91 @@ mod tests {
     #[test]
     fn test_url_validation() {
         // 有效的 URL
-        assert!(is_valid_url("https://example.com"));
-        assert!(is_valid_url("http://example.com/path"));
-        assert!(is_valid_url("https://sub.example.com:8080/path?query=1"));
+        assert!(is_valid_url_with_security(
+            "https://example.com",
+            false,
+            false
+        ));
+        assert!(is_valid_url_with_security(
+            "http://example.com/path",
+            false,
+            false
+        ));
+        assert!(is_valid_url_with_security(
+            "https://sub.example.com:8080/path?query=1",
+            false,
+            false
+        ));
 
         // 无效的 URL
-        assert!(!is_valid_url("javascript:alert(1)"));
-        assert!(!is_valid_url("data:text/html,<script>alert(1)</script>"));
-        assert!(!is_valid_url("file:///etc/passwd"));
-        assert!(!is_valid_url("ftp://example.com"));
-        assert!(!is_valid_url("too short"));
+        assert!(!is_valid_url_with_security(
+            "javascript:alert(1)",
+            false,
+            false
+        ));
+        assert!(!is_valid_url_with_security(
+            "data:text/html,<script>alert(1)</script>",
+            false,
+            false
+        ));
+        assert!(!is_valid_url_with_security(
+            "file:///etc/passwd",
+            false,
+            false
+        ));
+        assert!(!is_valid_url_with_security(
+            "ftp://example.com",
+            false,
+            false
+        ));
+        assert!(!is_valid_url_with_security("too short", false, false));
     }
 
     #[test]
     fn test_ssrf_protection() {
         // 默认情况下应该阻止 localhost
-        unsafe {
-            std::env::remove_var("ALLOW_LOCALHOST");
-        }
-        assert!(!is_valid_url("http://localhost:8080"));
-        assert!(!is_valid_url("http://127.0.0.1"));
-        assert!(!is_valid_url("http://127.0.0.1:8080"));
+        assert!(!is_valid_url_with_security(
+            "http://localhost:8080",
+            false,
+            false
+        ));
+        assert!(!is_valid_url_with_security(
+            "http://127.0.0.1",
+            false,
+            false
+        ));
+        assert!(!is_valid_url_with_security(
+            "http://127.0.0.1:8080",
+            false,
+            false
+        ));
+
+        // 允许 localhost 时应该通过
+        assert!(is_valid_url_with_security(
+            "http://localhost:8080",
+            true,
+            false
+        ));
 
         // 默认情况下应该阻止私有 IP
-        unsafe {
-            std::env::remove_var("ALLOW_PRIVATE_IPS");
-        }
-        assert!(!is_valid_url("http://192.168.1.1"));
-        assert!(!is_valid_url("http://10.0.0.1"));
-        assert!(!is_valid_url("http://172.16.0.1"));
+        assert!(!is_valid_url_with_security(
+            "http://192.168.1.1",
+            false,
+            false
+        ));
+        assert!(!is_valid_url_with_security("http://10.0.0.1", false, false));
+        assert!(!is_valid_url_with_security(
+            "http://172.16.0.1",
+            false,
+            false
+        ));
+
+        // 允许私有 IP 时应该通过
+        assert!(is_valid_url_with_security(
+            "http://192.168.1.1",
+            false,
+            true
+        ));
     }
 
     #[test]

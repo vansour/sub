@@ -209,14 +209,28 @@ impl RateLimiter {
         // 清理 IP 限制器（保留最近使用的）
         {
             let mut limiters = self.ip_limiters.lock();
-            // 只保留最近 1000 个 IP 的限制器，防止内存泄漏
-            if limiters.len() > 1000 {
+            // 只保留最近 1500 个 IP 的限制器，防止内存泄漏
+            // 当超过阈值时，随机删除 1/3 而不是全部清空，保持部分限流状态
+            const MAX_LIMITERS: usize = 1500;
+            const CLEANUP_TARGET: usize = 1000;
+
+            if limiters.len() > MAX_LIMITERS {
+                let to_remove = limiters.len() - CLEANUP_TARGET;
                 tracing::info!(
-                    count = limiters.len(),
-                    "Cleaning up IP rate limiters (keeping 1000 most recent)"
+                    current_count = limiters.len(),
+                    removing = to_remove,
+                    "Cleaning up IP rate limiters"
                 );
-                // 简单策略：清空重建（在高并发场景可能需要更智能的 LRU）
-                limiters.clear();
+
+                // 收集所有 IP 地址
+                let mut ips: Vec<_> = limiters.keys().copied().collect();
+                // 随机打乱
+                use rand::seq::SliceRandom;
+                ips.shuffle(&mut rand::rng());
+                // 删除前 to_remove 个
+                for ip in ips.iter().take(to_remove) {
+                    limiters.remove(ip);
+                }
             }
         }
     }

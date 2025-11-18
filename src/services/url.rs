@@ -24,6 +24,8 @@ impl UrlService {
     pub fn validate_urls_with_rejection(
         urls: Vec<String>,
         username: &str,
+        allow_localhost: bool,
+        allow_private_ips: bool,
     ) -> (Vec<String>, Vec<crate::models::RejectedUrl>) {
         // 检查 URL 数量限制
         if urls.len() > MAX_URLS_PER_USER {
@@ -40,7 +42,8 @@ impl UrlService {
         let sanitized_urls: Vec<String> = urls.iter().map(|u| sanitize_url(u)).collect();
 
         // 验证并清洗 URL
-        let validation_result = validate_and_sanitize_urls(sanitized_urls);
+        let validation_result =
+            validate_and_sanitize_urls(sanitized_urls, allow_localhost, allow_private_ips);
 
         if !validation_result.rejected.is_empty() {
             tracing::warn!(

@@ -15,6 +15,38 @@ use crate::{
     services::UrlService,
 };
 
+/// 从缓存或数据库获取用户数据
+async fn get_user_data(
+    state: &AppState,
+    username: &str,
+) -> Result<crate::models::UserData, AppError> {
+    // 先从缓存读取
+    {
+        let map = state.store.read();
+        if let Some(user_data) = map.get(username) {
+            return Ok(user_data.clone());
+        }
+    }
+
+    // 缓存中没有，从数据库读取
+    match state.db.get_user(username).await {
+        Ok(Some(db_user)) => {
+            let user_data = crate::models::UserData {
+                urls: db_user.urls.clone(),
+                order: db_user.order_index as usize,
+            };
+
+            // 更新缓存
+            let mut map = state.store.write();
+            map.insert(username.to_string(), user_data.clone());
+
+            Ok(user_data)
+        }
+        Ok(None) => Err(AppError::NotFound(format!("User '{}' not found", username))),
+        Err(e) => Err(AppError::InternalError(format!("Database error: {}", e))),
+    }
+}
+
 /// 创建或更新用户
 pub async fn create_user(
     State(state): State<AppState>,
@@ -41,8 +73,12 @@ pub async fn create_user(
     };
 
     // 验证 URL 列表
-    let (valid_urls, rejected_urls) =
-        UrlService::validate_urls_with_rejection(payload.urls, &username);
+    let (valid_urls, rejected_urls) = UrlService::validate_urls_with_rejection(
+        payload.urls,
+        &username,
+        state.security_config.allow_localhost,
+        state.security_config.allow_private_ips,
+    );
 
     tracing::debug!(
         username = %username,
@@ -149,57 +185,20 @@ pub async fn get_user_info(
 ) -> Result<impl IntoResponse, AppError> {
     tracing::debug!(username = %username, "get_user_info request received");
 
-    // 先从缓存读取
-    {
-        let map = state.store.read();
-        if let Some(user_data) = map.get(&username) {
-            tracing::debug!(
-                username = %username,
-                url_count = user_data.urls.len(),
-                "user info retrieved from cache"
-            );
-            let response = InfoResponse {
-                username,
-                urls: user_data.urls.clone(),
-            };
-            return Ok((StatusCode::OK, Json(ApiResponse::success(response))));
-        }
-    }
+    let user_data = get_user_data(&state, &username).await?;
 
-    // 缓存中没有，从数据库读取
-    match state.db.get_user(&username).await {
-        Ok(Some(db_user)) => {
-            tracing::debug!(
-                username = %username,
-                url_count = db_user.urls.len(),
-                "user info retrieved from database"
-            );
+    tracing::debug!(
+        username = %username,
+        url_count = user_data.urls.len(),
+        "user info retrieved successfully"
+    );
 
-            // 更新缓存
-            let mut map = state.store.write();
-            map.insert(
-                username.clone(),
-                crate::models::UserData {
-                    urls: db_user.urls.clone(),
-                    order: db_user.order_index as usize,
-                },
-            );
+    let response = InfoResponse {
+        username,
+        urls: user_data.urls,
+    };
 
-            let response = InfoResponse {
-                username,
-                urls: db_user.urls,
-            };
-            Ok((StatusCode::OK, Json(ApiResponse::success(response))))
-        }
-        Ok(None) => {
-            tracing::warn!(username = %username, "user not found");
-            Err(AppError::NotFound(format!("User '{}' not found", username)))
-        }
-        Err(e) => {
-            tracing::error!(username = %username, error = %e, "database error");
-            Err(AppError::InternalError(format!("Database error: {}", e)))
-        }
-    }
+    Ok((StatusCode::OK, Json(ApiResponse::success(response))))
 }
 
 /// 获取所有用户列表
@@ -315,43 +314,22 @@ pub async fn redirect_short(
 ) -> Result<impl IntoResponse, AppError> {
     tracing::info!(username = %username, "redirect_short request received");
 
-    let urls = {
-        let map = state.store.read();
-        if let Some(user_data) = map.get(&username) {
-            tracing::debug!(
-                username = %username,
-                url_count = user_data.urls.len(),
-                "user found with URLs"
-            );
-            user_data.urls.clone()
-        } else {
-            tracing::warn!(username = %username, "user not found");
-            return Err(AppError::NotFound(format!("User '{}' not found", username)));
-        }
-    };
+    let user_data = get_user_data(&state, &username).await?;
+    let urls = user_data.urls;
 
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
-        .connect_timeout(Duration::from_secs(10))
-        .user_agent("sub/0.1")
-        .danger_accept_invalid_certs(false)
-        .tcp_keepalive(Duration::from_secs(60))
-        .pool_idle_timeout(Duration::from_secs(90))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            let error_msg = format!("Failed to build HTTP client: {}", e);
-            tracing::error!(username = %username, error = %error_msg, "HTTP client build failed");
-            return Err(AppError::ExternalServiceError(error_msg));
-        }
-    };
+    tracing::debug!(
+        username = %username,
+        url_count = urls.len(),
+        "user found with URLs"
+    );
+
+    // 使用共享的 HTTP 客户端
+    let client = &state.http_client;
 
     // 并发抓取所有 URL，每个 URL 最多重试 2 次
     const MAX_RETRIES: usize = 2;
     const MAX_CONCURRENT: usize = 10;
 
-    let client = std::sync::Arc::new(client);
     let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT));
 
     tracing::debug!(
@@ -366,7 +344,7 @@ pub async fn redirect_short(
         .iter()
         .map(|url| {
             let url = url.clone();
-            let client = std::sync::Arc::clone(&client);
+            let client = client.clone();
             let semaphore = std::sync::Arc::clone(&semaphore);
 
             tokio::spawn(async move {

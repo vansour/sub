@@ -37,6 +37,10 @@ pub struct AppState {
     pub store: Arc<RwLock<HashMap<String, UserData>>>,
     pub auth_config: Arc<RwLock<config::AuthConfig>>,
     pub rate_limiter: RateLimiter,
+    /// 安全配置
+    pub security_config: Arc<config::SecurityConfig>,
+    /// 共享的 HTTP 客户端（用于 URL 抓取）
+    pub http_client: reqwest::Client,
 }
 
 /// 确保应用状态满足跨线程要求
@@ -72,32 +76,25 @@ async fn main() {
 
     tracing::info!("starting sub service with database backend");
 
-    // 设置安全配置（通过环境变量传递给验证函数）
-    unsafe {
-        std::env::set_var(
-            "ALLOW_PRIVATE_IPS",
-            if cfg.security.allow_private_ips {
-                "true"
-            } else {
-                "false"
-            },
-        );
-    }
-    unsafe {
-        std::env::set_var(
-            "ALLOW_LOCALHOST",
-            if cfg.security.allow_localhost {
-                "true"
-            } else {
-                "false"
-            },
-        );
-    }
+    // 日志记录安全配置
     tracing::info!(
         allow_private_ips = cfg.security.allow_private_ips,
         allow_localhost = cfg.security.allow_localhost,
         "Security settings configured"
     );
+
+    // 创建共享的 HTTP 客户端（用于所有 URL 抓取）
+    let http_client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(30))
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .user_agent(concat!("sub/", env!("CARGO_PKG_VERSION")))
+        .danger_accept_invalid_certs(false)
+        .tcp_keepalive(std::time::Duration::from_secs(60))
+        .pool_idle_timeout(std::time::Duration::from_secs(90))
+        .pool_max_idle_per_host(10)
+        .build()
+        .expect("failed to create HTTP client");
+    tracing::info!("Shared HTTP client initialized");
 
     // 初始化 Rate Limiter
     let rate_limiter = RateLimiter::new(rate_limiter::RateLimiterConfig {
@@ -155,6 +152,8 @@ async fn main() {
         store,
         auth_config: Arc::new(RwLock::new(cfg.auth.clone())),
         rate_limiter,
+        security_config: Arc::new(cfg.security.clone()),
+        http_client,
     };
 
     let addr: SocketAddr = format!("{}:{}", cfg.server.host, cfg.server.port)

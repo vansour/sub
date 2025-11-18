@@ -3,7 +3,6 @@ set -e
 
 CONFIG_DIR="/app/config"
 DEFAULTS_CONFIG_DIR="/app/.defaults/config"
-DEFAULTS_DATA_DIR="/app/.defaults/data"
 CONFIG_FILE="$CONFIG_DIR/config.toml"
 
 # 确保目录存在

@@ -4,6 +4,14 @@ use crate::metrics;
 use crate::utils::{hash_password, verify_password};
 use std::io::Write;
 
+// 常量时间 dummy hash，用于防止时序攻击
+lazy_static::lazy_static! {
+    static ref DUMMY_PASSWORD_HASH: String = {
+        bcrypt::hash("dummy_password_for_timing_attack_prevention", bcrypt::DEFAULT_COST)
+            .unwrap_or_else(|_| "$2b$12$dummyhashfortimingattackprevention".to_string())
+    };
+}
+
 pub struct AuthService;
 
 impl AuthService {
@@ -18,7 +26,7 @@ impl AuthService {
         if username != config_username {
             tracing::warn!("login failed for username: {} (user not found)", username);
             // 为了防止时序攻击，即使用户名不存在也进行哈希验证
-            let _ = verify_password(password, "$2b$12$dummy.hash.to.prevent.timing.attack.here");
+            let _ = verify_password(password, &DUMMY_PASSWORD_HASH);
             metrics::record_auth_attempt(false);
             return Err(AppError::AuthenticationError(
                 "Invalid username or password".to_string(),
