@@ -20,9 +20,9 @@ mod rate_limiter;
 mod services;
 mod utils;
 
+use db::Database;
 use models::UserData;
 use rate_limiter::RateLimiter;
-use db::Database;
 
 lazy_static! {
     /// 全局 Prometheus 指标注册表
@@ -123,7 +123,10 @@ async fn main() {
     // 从 TOML 文件导入现有数据（仅首次运行或迁移）
     match db.import_from_toml(&cfg.data.data_file_path).await {
         Ok(count) if count > 0 => {
-            tracing::info!(imported_users = count, "Migrated users from TOML to database");
+            tracing::info!(
+                imported_users = count,
+                "Migrated users from TOML to database"
+            );
         }
         Ok(_) => {
             tracing::debug!("No data to import from TOML file");
@@ -147,7 +150,10 @@ async fn main() {
                     },
                 );
             }
-            tracing::info!(user_count = store_write.len(), "Loaded users into memory cache");
+            tracing::info!(
+                user_count = store_write.len(),
+                "Loaded users into memory cache"
+            );
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to load users from database");

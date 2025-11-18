@@ -29,13 +29,7 @@ const RESERVED_USERNAMES: &[&str] = &[
 ];
 
 /// 危险的 URL 字符（用于检测潜在的注入攻击）
-const DANGEROUS_URL_PATTERNS: &[&str] = &[
-    "javascript:",
-    "data:",
-    "vbscript:",
-    "file:",
-    "about:",
-];
+const DANGEROUS_URL_PATTERNS: &[&str] = &["javascript:", "data:", "vbscript:", "file:", "about:"];
 
 /// 验证用户名是否合法
 /// 规则：
@@ -133,7 +127,7 @@ pub fn is_valid_url(url: &str) -> bool {
         // 检查 host 是否为 localhost 或私有 IP（防止 SSRF 攻击）
         if let Some(host) = parsed.host_str() {
             let host_lower = host.to_lowercase();
-            
+
             // 检查环境变量配置（默认阻止）
             let allow_localhost = std::env::var("ALLOW_LOCALHOST")
                 .unwrap_or_else(|_| "false".to_string())
@@ -255,9 +249,7 @@ pub fn sanitize_url(url: &str) -> String {
         // 移除两端空白
         .trim()
         // 规范化空白字符
-        .replace('\r', "")
-        .replace('\n', "")
-        .replace('\t', "")
+        .replace(['\r', '\n', '\t'], "")
 }
 
 /// 哈希密码
@@ -292,27 +284,27 @@ mod tests {
     fn test_invalid_usernames() {
         // 太短
         assert!(is_valid_username("a").is_err());
-        
+
         // 以数字开头
         assert!(is_valid_username("123user").is_err());
-        
+
         // 以中划线开头
         assert!(is_valid_username("-user").is_err());
-        
+
         // 包含非法字符
         assert!(is_valid_username("user@name").is_err());
         assert!(is_valid_username("user name").is_err());
         assert!(is_valid_username("user.name").is_err());
-        
+
         // 保留关键字
         assert!(is_valid_username("admin").is_err());
         assert!(is_valid_username("api").is_err());
         assert!(is_valid_username("static").is_err());
-        
+
         // 连续符号
         assert!(is_valid_username("user--name").is_err());
         assert!(is_valid_username("user__name").is_err());
-        
+
         // 以符号结尾
         assert!(is_valid_username("user-").is_err());
         assert!(is_valid_username("user_").is_err());
@@ -350,9 +342,15 @@ mod tests {
 
     #[test]
     fn test_url_sanitization() {
-        assert_eq!(sanitize_url("  https://example.com  "), "https://example.com");
+        assert_eq!(
+            sanitize_url("  https://example.com  "),
+            "https://example.com"
+        );
         assert_eq!(sanitize_url("https://example.com\n"), "https://example.com");
-        assert_eq!(sanitize_url("https://example.com\r\n"), "https://example.com");
+        assert_eq!(
+            sanitize_url("https://example.com\r\n"),
+            "https://example.com"
+        );
         assert_eq!(sanitize_url("https://example.com\t"), "https://example.com");
     }
 }

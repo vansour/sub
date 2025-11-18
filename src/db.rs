@@ -179,7 +179,10 @@ impl Database {
     }
 
     /// 批量更新用户顺序
-    pub async fn update_user_orders(&self, order_map: &std::collections::HashMap<String, i64>) -> anyhow::Result<()> {
+    pub async fn update_user_orders(
+        &self,
+        order_map: &std::collections::HashMap<String, i64>,
+    ) -> anyhow::Result<()> {
         let mut tx = self.pool.begin().await?;
 
         for (username, new_order) in order_map.iter() {
@@ -246,10 +249,7 @@ impl Database {
                         .collect();
 
                     if !url_list.is_empty() {
-                        let order = link
-                            .get("order")
-                            .and_then(|v| v.as_integer())
-                            .unwrap_or(0) as i64;
+                        let order = link.get("order").and_then(|v| v.as_integer()).unwrap_or(0);
 
                         self.upsert_user(username, &url_list, order).await?;
                         imported += 1;
@@ -279,13 +279,9 @@ mod tests {
         let db = Database::new("sqlite::memory:").await.unwrap();
 
         // 测试创建用户
-        db.upsert_user(
-            "testuser",
-            &vec!["https://example.com".to_string()],
-            1,
-        )
-        .await
-        .unwrap();
+        db.upsert_user("testuser", &vec!["https://example.com".to_string()], 1)
+            .await
+            .unwrap();
 
         // 测试获取用户
         let user = db.get_user("testuser").await.unwrap();

@@ -179,7 +179,8 @@ pub fn dec_http_requests_in_flight(method: &str, path: &str) {
         .dec();
 }
 
-/// 记录数据库操作
+/// 记录数据库操作指标
+#[allow(dead_code)]
 pub fn record_db_operation(operation: &str, success: bool, duration_secs: f64) {
     let result = if success { "success" } else { "failure" };
     DB_OPERATIONS_TOTAL

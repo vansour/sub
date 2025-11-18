@@ -27,31 +27,15 @@ fn default_database_path() -> String {
 }
 
 /// 安全配置
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct SecurityConfig {
     /// 是否允许访问私有 IP（防止 SSRF 攻击）
-    #[serde(default = "default_allow_private_ips")]
+    #[serde(default)]
     pub allow_private_ips: bool,
     /// 是否允许访问 localhost
-    #[serde(default = "default_allow_localhost")]
+    #[serde(default)]
     pub allow_localhost: bool,
-}
-
-fn default_allow_private_ips() -> bool {
-    false
-}
-
-fn default_allow_localhost() -> bool {
-    false
-}
-
-impl Default for SecurityConfig {
-    fn default() -> Self {
-        Self {
-            allow_private_ips: false,
-            allow_localhost: false,
-        }
-    }
 }
 
 #[derive(Debug, Deserialize, Clone)]

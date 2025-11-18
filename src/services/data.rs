@@ -7,11 +7,15 @@ use std::io::Write;
 use std::sync::Arc;
 use std::time::Instant;
 
+/// 数据服务：负责数据持久化和加载
+/// 注意：此服务已被 SQLite 数据库替代，保留用于向后兼容
+#[allow(dead_code)]
 pub struct DataService {
     store: Arc<RwLock<HashMap<String, UserData>>>,
     data_file_path: String,
 }
 
+#[allow(dead_code)]
 impl DataService {
     pub fn new(store: Arc<RwLock<HashMap<String, UserData>>>, data_file_path: String) -> Self {
         Self {

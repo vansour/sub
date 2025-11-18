@@ -77,9 +77,12 @@ pub async fn create_user(
     }
 
     // 获取 order（保留现有 order 或分配新的）
-    let order = if let Some(existing) = state.db.get_user(&username).await.map_err(|e| {
-        AppError::InternalError(format!("Failed to get user: {}", e))
-    })? {
+    let order = if let Some(existing) = state
+        .db
+        .get_user(&username)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to get user: {}", e)))?
+    {
         existing.order_index
     } else {
         // 新用户，获取最大 order + 1
@@ -171,7 +174,7 @@ pub async fn get_user_info(
                 url_count = db_user.urls.len(),
                 "user info retrieved from database"
             );
-            
+
             // 更新缓存
             let mut map = state.store.write();
             map.insert(
@@ -181,7 +184,7 @@ pub async fn get_user_info(
                     order: db_user.order_index as usize,
                 },
             );
-            
+
             let response = InfoResponse {
                 username,
                 urls: db_user.urls,
@@ -200,9 +203,7 @@ pub async fn get_user_info(
 }
 
 /// 获取所有用户列表
-pub async fn list_users(
-    State(state): State<AppState>,
-) -> Result<impl IntoResponse, AppError> {
+pub async fn list_users(State(state): State<AppState>) -> Result<impl IntoResponse, AppError> {
     tracing::debug!("list_users request received");
 
     // 从数据库获取所有用户
