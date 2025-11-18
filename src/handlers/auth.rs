@@ -1,17 +1,17 @@
 use crate::{
+    AppState,
     errors::AppError,
     models::{ApiResponse, ChangePasswordRequest, Claims, LoginRequest, LoginResponse},
     services::AuthService,
     utils::get_jwt_secret,
-    AppState,
 };
 use axum::{
+    Json,
     extract::{ConnectInfo, State},
     http::StatusCode,
     response::IntoResponse,
-    Json,
 };
-use jsonwebtoken::{encode, EncodingKey, Header};
+use jsonwebtoken::{EncodingKey, Header, encode};
 use std::net::SocketAddr;
 
 /// 登录处理

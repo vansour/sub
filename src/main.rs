@@ -1,9 +1,8 @@
 use std::{collections::HashMap, net::SocketAddr, sync::Arc};
 
 use axum::{
-    middleware as axum_middleware,
+    Router, middleware as axum_middleware,
     routing::{delete, get, post},
-    Router,
 };
 use lazy_static::lazy_static;
 use parking_lot::RwLock;
@@ -74,22 +73,26 @@ async fn main() {
     tracing::info!("starting sub service with database backend");
 
     // 设置安全配置（通过环境变量传递给验证函数）
-    std::env::set_var(
-        "ALLOW_PRIVATE_IPS",
-        if cfg.security.allow_private_ips {
-            "true"
-        } else {
-            "false"
-        },
-    );
-    std::env::set_var(
-        "ALLOW_LOCALHOST",
-        if cfg.security.allow_localhost {
-            "true"
-        } else {
-            "false"
-        },
-    );
+    unsafe {
+        std::env::set_var(
+            "ALLOW_PRIVATE_IPS",
+            if cfg.security.allow_private_ips {
+                "true"
+            } else {
+                "false"
+            },
+        );
+    }
+    unsafe {
+        std::env::set_var(
+            "ALLOW_LOCALHOST",
+            if cfg.security.allow_localhost {
+                "true"
+            } else {
+                "false"
+            },
+        );
+    }
     tracing::info!(
         allow_private_ips = cfg.security.allow_private_ips,
         allow_localhost = cfg.security.allow_localhost,

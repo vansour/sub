@@ -63,10 +63,10 @@ pub fn is_valid_username(username: &str) -> Result<(), String> {
     }
 
     // 不允许以数字或中划线开头
-    if let Some(first_char) = username.chars().next() {
-        if first_char.is_ascii_digit() || first_char == '-' {
-            return Err("Username cannot start with a number or hyphen".to_string());
-        }
+    if let Some(first_char) = username.chars().next()
+        && (first_char.is_ascii_digit() || first_char == '-')
+    {
+        return Err("Username cannot start with a number or hyphen".to_string());
     }
 
     // 检查是否为保留关键字
@@ -328,13 +328,17 @@ mod tests {
     #[test]
     fn test_ssrf_protection() {
         // 默认情况下应该阻止 localhost
-        std::env::remove_var("ALLOW_LOCALHOST");
+        unsafe {
+            std::env::remove_var("ALLOW_LOCALHOST");
+        }
         assert!(!is_valid_url("http://localhost:8080"));
         assert!(!is_valid_url("http://127.0.0.1"));
         assert!(!is_valid_url("http://127.0.0.1:8080"));
 
         // 默认情况下应该阻止私有 IP
-        std::env::remove_var("ALLOW_PRIVATE_IPS");
+        unsafe {
+            std::env::remove_var("ALLOW_PRIVATE_IPS");
+        }
         assert!(!is_valid_url("http://192.168.1.1"));
         assert!(!is_valid_url("http://10.0.0.1"));
         assert!(!is_valid_url("http://172.16.0.1"));

@@ -1,6 +1,6 @@
+use axum::Json;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
-use axum::Json;
 use std::time::Instant;
 
 use crate::metrics::{self, CheckResult, HealthChecks, HealthStatus};
@@ -81,15 +81,14 @@ async fn check_system_resources() -> CheckResult {
                 for line in status_content.lines() {
                     if line.starts_with("VmRSS:") {
                         // 如果内存占用超过 1GB，标记为不健康
-                        if let Some(size_str) = line.split_whitespace().nth(1) {
-                            if let Ok(size_kb) = size_str.parse::<u64>() {
-                                if size_kb > 1024 * 1024 {
-                                    return CheckResult::unhealthy(
-                                        format!("High memory usage: {} KB", size_kb),
-                                        start.elapsed().as_millis() as u64,
-                                    );
-                                }
-                            }
+                        if let Some(size_str) = line.split_whitespace().nth(1)
+                            && let Ok(size_kb) = size_str.parse::<u64>()
+                            && size_kb > 1024 * 1024
+                        {
+                            return CheckResult::unhealthy(
+                                format!("High memory usage: {} KB", size_kb),
+                                start.elapsed().as_millis() as u64,
+                            );
                         }
                     }
                 }

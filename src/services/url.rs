@@ -1,7 +1,7 @@
 use crate::errors::AppError;
 use crate::errors::AppResult;
 use crate::utils::{
-    is_valid_username, sanitize_url, validate_and_sanitize_urls, MAX_URLS_PER_USER,
+    MAX_URLS_PER_USER, is_valid_username, sanitize_url, validate_and_sanitize_urls,
 };
 
 pub struct UrlService;

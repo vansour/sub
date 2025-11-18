@@ -1,7 +1,7 @@
 use governor::{
+    Quota, RateLimiter as GovernorRateLimiter,
     clock::DefaultClock,
     state::{InMemoryState, NotKeyed},
-    Quota, RateLimiter as GovernorRateLimiter,
 };
 use parking_lot::Mutex;
 use std::collections::HashMap;
@@ -84,20 +84,20 @@ impl RateLimiter {
 
         if let Some(attempt) = attempts.get(&ip) {
             // 检查是否被锁定
-            if let Some(locked_until) = attempt.locked_until {
-                if now < locked_until {
-                    let remaining = locked_until.duration_since(now).as_secs();
-                    tracing::warn!(
-                        ip = %ip,
-                        remaining_secs = remaining,
-                        "Login attempt blocked: IP is locked"
-                    );
-                    crate::metrics::record_rate_limit_rejection("login", "locked");
-                    return Err(format!(
-                        "Too many failed login attempts. Please try again in {} seconds.",
-                        remaining
-                    ));
-                }
+            if let Some(locked_until) = attempt.locked_until
+                && now < locked_until
+            {
+                let remaining = locked_until.duration_since(now).as_secs();
+                tracing::warn!(
+                    ip = %ip,
+                    remaining_secs = remaining,
+                    "Login attempt blocked: IP is locked"
+                );
+                crate::metrics::record_rate_limit_rejection("login", "locked");
+                return Err(format!(
+                    "Too many failed login attempts. Please try again in {} seconds.",
+                    remaining
+                ));
             }
 
             // 检查是否超过速率限制

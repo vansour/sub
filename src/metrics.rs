@@ -179,29 +179,10 @@ pub fn dec_http_requests_in_flight(method: &str, path: &str) {
         .dec();
 }
 
-/// 记录数据库操作指标
-#[allow(dead_code)]
-pub fn record_db_operation(operation: &str, success: bool, duration_secs: f64) {
-    let result = if success { "success" } else { "failure" };
-    DB_OPERATIONS_TOTAL
-        .with_label_values(&[operation, result])
-        .inc();
-
-    DB_OPERATION_DURATION_SECONDS
-        .with_label_values(&[operation])
-        .observe(duration_secs);
-}
-
 /// 记录认证尝试
 pub fn record_auth_attempt(success: bool) {
     let result = if success { "success" } else { "failure" };
     AUTH_ATTEMPTS_TOTAL.with_label_values(&[result]).inc();
-}
-
-/// 设置活跃用户数
-#[allow(dead_code)]
-pub fn set_active_users(count: i64) {
-    ACTIVE_USERS_COUNT.set(count);
 }
 
 /// 记录速率限制拒绝

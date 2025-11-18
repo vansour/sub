@@ -144,38 +144,36 @@ impl AppConfig {
     /// 从数据库获取或生成 JWT Secret
     async fn get_jwt_secret_from_db(db: &crate::db::Database) -> anyhow::Result<String> {
         // 1. 环境变量优先（支持用户自定义）
-        if let Ok(secret) = std::env::var("JWT_SECRET") {
-            if !secret.is_empty() && secret != "change-me-to-a-strong-random-secret-in-production" {
-                tracing::info!("Using JWT_SECRET from environment variable");
-                // 保存到数据库以便下次使用
-                let _ = db.set_config("jwt_secret", &secret).await;
-                return Ok(secret);
-            }
+        if let Ok(secret) = std::env::var("JWT_SECRET")
+            && !secret.is_empty()
+            && secret != "change-me-to-a-strong-random-secret-in-production"
+        {
+            tracing::info!("Using JWT_SECRET from environment variable");
+            // 保存到数据库以便下次使用
+            let _ = db.set_config("jwt_secret", &secret).await;
+            return Ok(secret);
         }
 
         // 2. 尝试从数据库读取
-        if let Some(secret) = db.get_config("jwt_secret").await? {
-            if !secret.is_empty() {
-                tracing::info!("Using JWT_SECRET from database");
-                return Ok(secret);
-            }
+        if let Some(secret) = db.get_config("jwt_secret").await?
+            && !secret.is_empty()
+        {
+            tracing::info!("Using JWT_SECRET from database");
+            return Ok(secret);
         }
 
         // 3. 尝试从旧的 config.toml 迁移
-        if let Ok(content) = std::fs::read_to_string("config/config.toml") {
-            if let Ok(config) = toml::from_str::<toml::Value>(&content) {
-                if let Some(secret) = config
-                    .get("auth")
-                    .and_then(|v| v.get("secret"))
-                    .and_then(|v| v.as_str())
-                {
-                    if !secret.is_empty() {
-                        tracing::info!("Migrating JWT_SECRET from config.toml to database");
-                        db.set_config("jwt_secret", secret).await?;
-                        return Ok(secret.to_string());
-                    }
-                }
-            }
+        if let Ok(content) = std::fs::read_to_string("config/config.toml")
+            && let Ok(config) = toml::from_str::<toml::Value>(&content)
+            && let Some(secret) = config
+                .get("auth")
+                .and_then(|v| v.get("secret"))
+                .and_then(|v| v.as_str())
+            && !secret.is_empty()
+        {
+            tracing::info!("Migrating JWT_SECRET from config.toml to database");
+            db.set_config("jwt_secret", secret).await?;
+            return Ok(secret.to_string());
         }
 
         // 4. 生成新的 secret 并保存到数据库
