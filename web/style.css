@@ -160,6 +160,7 @@ button {
 table {
 	width: 100%;
 	border-collapse: collapse;
+	table-layout: fixed;
 }
 
 thead {
@@ -167,17 +168,44 @@ thead {
 }
 
 th {
-	text-align: left;
-	padding: 12px;
+	padding: 12px 16px;
 	font-weight: 600;
 	color: #374151;
 	border-bottom: 2px solid #e5e7eb;
 }
 
+/* 列宽分配：拖拽 40px，用户名 25%，链接 45%，操作 30% */
+th.drag-col,
+td.drag-col {
+	width: 40px;
+	text-align: center;
+}
+
+/* 用户名列 - 左对齐 */
+th:nth-child(2),
+td:nth-child(2) {
+	width: 25%;
+	text-align: left;
+}
+
+/* 链接列 - 居中对齐 */
+th:nth-child(3),
+td:nth-child(3) {
+	width: 45%;
+	text-align: center;
+}
+
+/* 操作列 - 右对齐 */
+th:nth-child(4),
+td:nth-child(4) {
+	width: 30%;
+	text-align: right;
+}
+
 td {
-	padding: 12px;
+	padding: 12px 16px;
 	border-bottom: 1px solid #e5e7eb;
-	vertical-align: top;
+	vertical-align: middle;
 }
 
 tr:last-child td {
@@ -190,8 +218,7 @@ tr:hover {
 
 .url-cell {
 	font-size: 13px;
-	max-width: 400px;
-	word-break: break-all;
+	color: #6b7280;
 }
 
 .url-link {
@@ -207,6 +234,11 @@ tr:hover {
 	color: #111827;
 	font-weight: 600;
 	text-decoration: none;
+	display: inline-block;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 
 .username-link:hover {
@@ -222,12 +254,13 @@ tr:hover {
 .btn-edit,
 .btn-delete {
 	display: inline-block;
-	padding: 6px 12px;
-	margin-right: 6px;
-	font-size: 13px;
+	padding: 6px 10px;
+	margin-left: 6px;
+	font-size: 12px;
 	border-radius: 4px;
 	transition: all 0.2s;
 	cursor: pointer;
+	border: none;
 }
 
 .btn-view {
@@ -515,16 +548,19 @@ code {
 .drag-col {
 	width: 40px;
 	text-align: center;
+	padding: 8px !important;
 }
 
 .drag-handle {
 	cursor: move;
 	user-select: none;
-	font-size: 20px;
+	font-size: 18px;
 	color: #9ca3af;
 	text-align: center;
-	padding: 8px !important;
+	display: inline-block;
+	padding: 4px !important;
 	transition: color 0.2s;
+	line-height: 1;
 }
 
 .drag-handle:hover {
