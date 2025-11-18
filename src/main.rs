@@ -72,9 +72,12 @@ async fn main() {
         .route("/api/create", post(handlers::create_user))
         .route("/api/users", get(handlers::list_users))
         .route("/api/reorder", post(handlers::reorder_users))
-        .route("/api/delete/:username", delete(handlers::delete_user))
+        .route("/api/delete/{username}", delete(handlers::delete_user))
         .route("/api/change-password", post(handlers::change_password))
-        .layer(axum_middleware::from_fn(middleware::auth_middleware));
+        .layer(axum_middleware::from_fn_with_state(
+            state.clone(),
+            middleware::auth_middleware,
+        ));
 
     let app = Router::new()
         .route("/", get(handlers::index))
@@ -83,8 +86,8 @@ async fn main() {
         .route("/metrics", get(handlers::metrics))
         .route("/favicon.ico", get(handlers::favicon))
         .route("/api/login", post(handlers::login))
-        .route("/api/info/:username", get(handlers::get_user_info))
-        .route("/:username", get(handlers::redirect_short))
+        .route("/api/info/{username}", get(handlers::get_user_info))
+        .route("/{username}", get(handlers::redirect_short))
         .merge(protected_routes)
         .nest_service("/static", tower_http::services::ServeDir::new("web"))
         .layer(axum_middleware::from_fn(middleware::metrics_middleware))

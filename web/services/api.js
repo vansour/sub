@@ -65,19 +65,22 @@ export async function login(username, password) {
     method: 'POST',
     body: JSON.stringify({ username, password }),
   });
-  return data.token;
+  // 后端返回格式为 {success: true, data: {token: "..."}}
+  return data.data?.token || data.token;
 }
 
 // 获取用户列表
 export async function fetchUsers() {
   const data = await apiRequest('/api/users');
-  return data.users || [];
+  // 后端返回格式为 {success: true, data: {users: [...]}}
+  return data.data?.users || data.users || [];
 }
 
 // 获取用户信息
 export async function fetchUserInfo(username) {
   const data = await apiRequest(`/api/info/${username}`);
-  return data;
+  // 后端返回格式为 {success: true, data: {username: "...", urls: [...]}}
+  return data.data || data;
 }
 
 // 创建用户
@@ -90,7 +93,8 @@ export async function createUser(username, urls, allowOverwrite = false) {
       allow_overwrite: allowOverwrite,
     }),
   });
-  return data;
+  // 后端返回格式为 {success: true, data: {username: "...", ...}}
+  return data.data || data;
 }
 
 // 删除用户
@@ -98,6 +102,7 @@ export async function deleteUser(username) {
   const data = await apiRequest(`/api/delete/${username}`, {
     method: 'DELETE',
   });
+  // 后端返回格式为 {success: true, message: "..."}
   return data;
 }
 
@@ -107,6 +112,7 @@ export async function reorderUsers(usernames) {
     method: 'POST',
     body: JSON.stringify({ usernames }),
   });
+  // 后端返回格式为 {success: true, message: "..."}
   return data;
 }
 
@@ -120,6 +126,7 @@ export async function changePassword(oldPassword, newUsername, newPassword) {
       new_password: newPassword,
     }),
   });
+  // 后端返回格式为 {success: true, message: "..."}
   return data;
 }
 

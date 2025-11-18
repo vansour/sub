@@ -61,6 +61,7 @@ desktop.ini
 
 # Docker volumes and data
 /volumes/
+/data/
 
 # Temporary files
 *.tmp

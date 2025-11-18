@@ -267,7 +267,9 @@ async function loadUserList() {
 		}
 		
 		const data = await resp.json();
-		displayUserList(data.users);
+		// 后端返回格式为 {success: true, data: {users: [...]}}
+		const users = data.data?.users || data.users || [];
+		displayUserList(users);
 	} catch (error) {
 		console.error("加载用户列表失败:", error);
 		showErrorState(
@@ -576,7 +578,9 @@ document.getElementById("form").addEventListener("submit", async (e) => {
 		
 		// 显示通知
 		const actionText = isEditMode ? '已更新' : '已创建';
-		showNotification(`用户 "${data.username}" ${actionText}`, 'success');
+		// 后端返回格式为 {success: true, data: {username: "..."}}
+		const createdUsername = data.data?.username || data.username || '用户';
+		showNotification(`用户 "${createdUsername}" ${actionText}`, 'success');
 		
 		// 关闭弹窗
 		closeModal();

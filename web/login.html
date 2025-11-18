@@ -219,13 +219,19 @@
 					const data = await response.json();
 
 					if (response.ok) {
-						// 保存 token
-						localStorage.setItem('auth_token', data.token);
-						// 跳转到主页
-						window.location.href = '/';
+						// 保存 token (后端返回格式为 {success: true, data: {token: "..."}})
+						const token = data.data?.token || data.token;
+						if (token) {
+							localStorage.setItem('auth_token', token);
+							// 跳转到主页
+							window.location.href = '/';
+						} else {
+							errorMessage.textContent = '登录响应格式错误';
+							errorMessage.classList.add('show');
+						}
 					} else {
 						// 显示错误信息
-						errorMessage.textContent = data.error || '登录失败，请检查用户名和密码';
+						errorMessage.textContent = data.error || data.message || '登录失败，请检查用户名和密码';
 						errorMessage.classList.add('show');
 					}
 				} catch (error) {
