@@ -104,13 +104,7 @@ pub fn verify_password(password: &str, hash: &str) -> bool {
     bcrypt::verify(password, hash).unwrap_or(false)
 }
 
-/// 获取JWT secret，优先从环境变量读取
-pub fn get_jwt_secret(default_secret: String) -> String {
-    std::env::var("JWT_SECRET").unwrap_or_else(|_| {
-        tracing::warn!(
-            "JWT_SECRET environment variable not set, using secret from config file. \
-             This is not recommended for production!"
-        );
-        default_secret
-    })
+/// 获取 JWT secret（直接使用配置中已加载的值）
+pub fn get_jwt_secret(secret: String) -> String {
+    secret
 }

@@ -39,6 +39,10 @@ pub fn init_metrics() -> Registry {
         .expect("failed to register ACTIVE_USERS_COUNT");
 
     registry
+        .register(Box::new(RATE_LIMIT_REJECTIONS_TOTAL.clone()))
+        .expect("failed to register RATE_LIMIT_REJECTIONS_TOTAL");
+
+    registry
 }
 
 lazy_static! {
@@ -91,6 +95,12 @@ lazy_static! {
         "active_users_count",
         "Number of active users"
     ).expect("failed to create ACTIVE_USERS_COUNT");
+
+    /// 速率限制拒绝次数
+    pub static ref RATE_LIMIT_REJECTIONS_TOTAL: IntCounterVec = IntCounterVec::new(
+        prometheus::Opts::new("rate_limit_rejections_total", "Total rate limit rejections"),
+        &["type", "reason"]
+    ).expect("failed to create RATE_LIMIT_REJECTIONS_TOTAL");
 }
 
 /// 健康检查状态
@@ -191,4 +201,11 @@ pub fn record_auth_attempt(success: bool) {
 #[allow(dead_code)]
 pub fn set_active_users(count: i64) {
     ACTIVE_USERS_COUNT.set(count);
+}
+
+/// 记录速率限制拒绝
+pub fn record_rate_limit_rejection(limit_type: &str, reason: &str) {
+    RATE_LIMIT_REJECTIONS_TOTAL
+        .with_label_values(&[limit_type, reason])
+        .inc();
 }

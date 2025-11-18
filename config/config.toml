@@ -1,3 +1,6 @@
+[auth]
+secret = "e36df2983d312607cd071dba277072c6b2d31260c1eb3e2874bf6be9e6a114d5"
+
 [data]
 dataFilePath = "/app/data/data.toml"
 
@@ -8,3 +11,13 @@ logFilePath = "/app/logs/sub.log"
 [server]
 host = "0.0.0.0"
 port = 8080
+
+[rate_limit]
+# 登录尝试限制：每个 IP 每分钟最多尝试次数
+login_attempts_per_minute = 5
+# 登录失败后的锁定时长（秒）
+login_lockout_duration_secs = 300
+# API 请求限制：每个 IP 每秒最多请求次数
+api_requests_per_second = 10
+# 全局 API 请求限制：每秒最多请求次数
+global_requests_per_second = 100

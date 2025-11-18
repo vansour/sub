@@ -2,12 +2,13 @@ use crate::metrics;
 use crate::models::Claims;
 use crate::AppState;
 use axum::{
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::{header, StatusCode},
     middleware::Next,
     response::Response,
 };
 use jsonwebtoken::{decode, DecodingKey, Validation};
+use std::net::SocketAddr;
 
 /// 验证 JWT Token 的中间件
 pub async fn auth_middleware(
@@ -94,4 +95,33 @@ pub async fn metrics_middleware(req: Request, next: Next) -> Response {
     metrics::dec_http_requests_in_flight(&method, &path);
 
     response
+}
+
+/// API 请求速率限制中间件
+pub async fn rate_limit_middleware(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    req: Request,
+    next: Next,
+) -> Result<Response, StatusCode> {
+    let client_ip = addr.ip();
+    let path = req.uri().path().to_string();
+
+    // 对某些路径跳过速率限制
+    if path == "/healthz" || path == "/health" || path == "/metrics" || path == "/favicon.ico" {
+        return Ok(next.run(req).await);
+    }
+
+    // 检查速率限制
+    if let Err(msg) = state.rate_limiter.check_api_request(client_ip) {
+        tracing::warn!(
+            ip = %client_ip,
+            path = %path,
+            reason = %msg,
+            "API request blocked by rate limiter"
+        );
+        return Err(StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    Ok(next.run(req).await)
 }

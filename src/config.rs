@@ -25,24 +25,60 @@ pub struct AuthConfig {
     /// 密码哈希值（bcrypt）
     #[serde(alias = "password")] // 向后兼容旧的明文密码字段
     pub password_hash: String,
-    /// JWT secret
+    /// JWT secret (优先从环境变量读取，其次从配置文件，最后自动生成)
+    #[serde(default)]
     pub secret: String,
 }
 
-/// 内置的管理员凭证（生产环境建议使用环境变量覆盖）
-const ADMIN_USERNAME: &str = "admin";
-const ADMIN_PASSWORD: &str = "admin"; // 启动时会被 hash 化
+/// Rate Limiting 配置
+#[derive(Debug, Deserialize, Clone)]
+pub struct RateLimitConfig {
+    /// 登录尝试限制：每个 IP 每分钟最多尝试次数
+    #[serde(default = "default_login_attempts")]
+    pub login_attempts_per_minute: u32,
+    /// 登录失败后的锁定时长（秒）
+    #[serde(default = "default_lockout_duration")]
+    pub login_lockout_duration_secs: u64,
+    /// API 请求限制：每个 IP 每秒最多请求次数
+    #[serde(default = "default_api_requests_per_second")]
+    pub api_requests_per_second: u32,
+    /// 全局 API 请求限制：每秒最多请求次数
+    #[serde(default = "default_global_requests_per_second")]
+    pub global_requests_per_second: u32,
+}
+
+fn default_login_attempts() -> u32 {
+    5
+}
+fn default_lockout_duration() -> u64 {
+    300
+}
+fn default_api_requests_per_second() -> u32 {
+    10
+}
+fn default_global_requests_per_second() -> u32 {
+    100
+}
+
+impl Default for RateLimitConfig {
+    fn default() -> Self {
+        Self {
+            login_attempts_per_minute: default_login_attempts(),
+            login_lockout_duration_secs: default_lockout_duration(),
+            api_requests_per_second: default_api_requests_per_second(),
+            global_requests_per_second: default_global_requests_per_second(),
+        }
+    }
+}
 
 /// 生成随机 JWT Secret (32 字节的 hex 编码)
 fn generate_jwt_secret() -> String {
     use rand::RngCore;
     use std::fmt::Write;
 
-    // 生成 32 字节的随机数据
     let mut random_bytes = [0u8; 32];
     rand::rng().fill_bytes(&mut random_bytes);
 
-    // 转换为 hex 字符串
     let mut hex_string = String::with_capacity(64);
     for byte in &random_bytes {
         let _ = write!(hex_string, "{:02x}", byte);
@@ -50,14 +86,21 @@ fn generate_jwt_secret() -> String {
     hex_string
 }
 
+/// 内置的管理员凭证（生产环境建议使用环境变量覆盖）
+const ADMIN_USERNAME: &str = "admin";
+const ADMIN_PASSWORD: &str = "admin"; // 启动时会被 hash 化
+
 /// 获取 JWT Secret，优先级：环境变量 > config.toml > 自动生成并保存
 fn get_jwt_secret() -> anyhow::Result<String> {
-    // 1. 环境变量优先
+    // 1. 环境变量优先（支持用户自定义）
     if let Ok(secret) = std::env::var("JWT_SECRET") {
-        return Ok(secret);
+        if !secret.is_empty() && secret != "change-me-to-a-strong-random-secret-in-production" {
+            tracing::info!("Using JWT_SECRET from environment variable");
+            return Ok(secret);
+        }
     }
 
-    // 2. 尝试从 config.toml 读取
+    // 2. 尝试从 config.toml 读取已保存的 secret
     if let Ok(content) = std::fs::read_to_string("config/config.toml") {
         if let Ok(config) = toml::from_str::<toml::Value>(&content) {
             if let Some(secret) = config
@@ -66,15 +109,16 @@ fn get_jwt_secret() -> anyhow::Result<String> {
                 .and_then(|v| v.as_str())
             {
                 if !secret.is_empty() {
+                    tracing::info!("Using JWT_SECRET from config file");
                     return Ok(secret.to_string());
                 }
             }
         }
     }
 
-    // 3. 生成新的 secret 并保存
+    // 3. 生成新的 secret 并保存到配置文件
     let new_secret = generate_jwt_secret();
-    eprintln!("Generated new JWT secret and saved to config.toml");
+    tracing::info!("Generated new random JWT_SECRET and saving to config.toml");
     save_jwt_secret(&new_secret)?;
 
     Ok(new_secret)
@@ -85,6 +129,11 @@ fn save_jwt_secret(secret: &str) -> anyhow::Result<()> {
     use std::io::Write;
 
     let config_path = "config/config.toml";
+
+    // 确保配置目录存在
+    if let Some(parent) = std::path::Path::new(config_path).parent() {
+        std::fs::create_dir_all(parent)?;
+    }
 
     // 读取现有配置或创建新配置
     let mut config = if std::path::Path::new(config_path).exists() {
@@ -123,10 +172,15 @@ pub struct AppConfig {
     pub log: LogConfig,
     pub data: DataConfig,
     pub auth: AuthConfig,
+    #[serde(default)]
+    pub rate_limit: RateLimitConfig,
 }
 
 impl AppConfig {
     pub fn load() -> anyhow::Result<Self> {
+        // 首先检查 JWT_SECRET 环境变量
+        let jwt_secret = get_jwt_secret()?;
+
         // 首先尝试从 config.toml 加载，如果不存在或格式不对则使用内置默认值
         let mut cfg = match std::fs::read_to_string("config/config.toml") {
             Ok(content) => match toml::from_str::<AppConfig>(&content) {
@@ -160,8 +214,8 @@ impl AppConfig {
             }
         }
 
-        // 获取或生成 JWT Secret
-        cfg.auth.secret = get_jwt_secret()?;
+        // 设置 JWT Secret
+        cfg.auth.secret = jwt_secret;
 
         Ok(cfg)
     }
@@ -188,6 +242,7 @@ impl AppConfig {
                 password_hash,
                 secret: String::new(), // 将在 load() 中填充
             },
+            rate_limit: RateLimitConfig::default(),
         })
     }
 

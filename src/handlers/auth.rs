@@ -5,16 +5,30 @@ use crate::{
     utils::get_jwt_secret,
     AppState,
 };
-use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
+use axum::{
+    extract::{ConnectInfo, State},
+    http::StatusCode,
+    response::IntoResponse,
+    Json,
+};
 use jsonwebtoken::{encode, EncodingKey, Header};
+use std::net::SocketAddr;
 
 /// 登录处理
 pub async fn login(
     State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Json(payload): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, AppError> {
     let username = payload.username.clone();
-    tracing::info!(username = %username, "login attempt");
+    let client_ip = addr.ip();
+    tracing::info!(username = %username, ip = %client_ip, "login attempt");
+
+    // 检查 rate limit
+    if let Err(msg) = state.rate_limiter.check_login_attempt(client_ip) {
+        tracing::warn!(username = %username, ip = %client_ip, "login blocked by rate limiter");
+        return Err(AppError::AuthenticationError(msg));
+    }
 
     let (config_username, password_hash, jwt_secret) = {
         let auth = state.auth_config.read();
@@ -33,10 +47,14 @@ pub async fn login(
         &password_hash,
     ) {
         Ok(()) => {
-            tracing::info!(username = %username, "credentials verified successfully");
+            tracing::info!(username = %username, ip = %client_ip, "credentials verified successfully");
+            // 验证成功，清除失败记录
+            state.rate_limiter.record_login_success(client_ip);
         }
         Err(e) => {
-            tracing::warn!(username = %username, error = %e, "credentials verification failed");
+            tracing::warn!(username = %username, ip = %client_ip, error = %e, "credentials verification failed");
+            // 记录登录失败
+            state.rate_limiter.record_login_failure(client_ip);
             return Err(e);
         }
     }
@@ -70,7 +88,7 @@ pub async fn login(
         }
     };
 
-    tracing::info!(username = %username, "login successful");
+    tracing::info!(username = %username, ip = %client_ip, "login successful");
     Ok((
         StatusCode::OK,
         Json(ApiResponse::success(LoginResponse { token })),
