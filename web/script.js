@@ -19,7 +19,7 @@ function showGlobalLoading() {
 				loader.style.display = 'flex';
 			}
 		}
-	}, 200); // 200ms 后才显示加载指示器
+	}, 100); // 100ms 后才显示加载指示器
 }
 
 function hideGlobalLoading() {
@@ -103,16 +103,6 @@ function getErrorMessage(error, defaultMsg = null) {
 	return defaultMsg || ERROR_MESSAGES['default'];
 }
 
-// 认证检查
-function checkAuth() {
-	const token = localStorage.getItem('auth_token');
-	if (!token && window.location.pathname !== '/static/login.html') {
-		window.location.href = '/static/login.html';
-		return false;
-	}
-	return true;
-}
-
 // 获取认证 header
 function getAuthHeader() {
 	const token = localStorage.getItem('auth_token');
@@ -137,9 +127,6 @@ function logout() {
 	localStorage.removeItem('auth_token');
 	window.location.href = '/static/login.html';
 }
-
-// 页面加载时检查认证
-checkAuth();
 
 // 统一的 API 请求函数
 async function apiRequest(url, options = {}) {

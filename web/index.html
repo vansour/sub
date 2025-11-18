@@ -5,6 +5,15 @@
 		<title>多链接短链接合并服务</title>
 		<link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
 		<link rel="stylesheet" href="/static/style.css" />
+		<script>
+			// 立即进行认证检查，防止闪烁
+			(function() {
+				const token = localStorage.getItem('auth_token');
+				if (!token && window.location.pathname !== '/static/login.html' && !window.location.pathname.endsWith('login.html')) {
+					window.location.href = '/static/login.html';
+				}
+			})();
+		</script>
 	</head>
 	<body>
 		<div class="container">
