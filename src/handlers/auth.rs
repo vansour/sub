@@ -127,14 +127,17 @@ pub async fn change_password(
         }
     };
 
-    // 保存到文件
-    match AuthService::save_config(&new_auth) {
+    // 保存到数据库
+    match crate::config::AppConfig::update_auth(&state.db, &new_auth).await {
         Ok(()) => {
-            tracing::info!(new_username = %new_username, "auth config persisted to file");
+            tracing::info!(new_username = %new_username, "auth config persisted to database");
         }
         Err(e) => {
             tracing::error!(new_username = %new_username, error = %e, "failed to persist auth config");
-            return Err(e);
+            return Err(AppError::InternalError(format!(
+                "Failed to save auth config: {}",
+                e
+            )));
         }
     }
 

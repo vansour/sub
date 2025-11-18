@@ -25,7 +25,6 @@ jsonwebtoken = { version = "10.2.0", default-features = false, features = ["aws_
 bcrypt = "0.17.1"
 chrono = "0.4.42"
 prometheus = "0.14.0"
-lazy_static = "1.5.0"
 tower = { version = "0.5.2", features = ["limit", "buffer"] }
 governor = "0.10.2"
 sqlx = { version = "0.8.6", features = ["runtime-tokio", "sqlite"] }

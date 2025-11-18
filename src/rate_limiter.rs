@@ -13,6 +13,13 @@ use std::time::{Duration, Instant};
 /// IP 速率限制器类型别名
 type IpRateLimiter = Arc<GovernorRateLimiter<NotKeyed, InMemoryState, DefaultClock>>;
 
+/// IP 限制器条目（带最后访问时间，用于 LRU）
+#[derive(Clone)]
+struct IpLimiterEntry {
+    limiter: IpRateLimiter,
+    last_access: Instant,
+}
+
 /// Rate Limiter 配置
 #[derive(Debug, Clone)]
 pub struct RateLimiterConfig {
@@ -56,8 +63,8 @@ pub struct RateLimiter {
     login_attempts: Arc<Mutex<HashMap<IpAddr, LoginAttempt>>>,
     /// 全局 API 速率限制器
     global_limiter: IpRateLimiter,
-    /// 每个 IP 的速率限制器 (IP -> RateLimiter)
-    ip_limiters: Arc<Mutex<HashMap<IpAddr, IpRateLimiter>>>,
+    /// 每个 IP 的速率限制器 (IP -> IpLimiterEntry，带 LRU 支持)
+    ip_limiters: Arc<Mutex<HashMap<IpAddr, IpLimiterEntry>>>,
 }
 
 impl RateLimiter {
@@ -172,15 +179,22 @@ impl RateLimiter {
 
         // 检查单个 IP 的限制
         let mut limiters = self.ip_limiters.lock();
-        let limiter = limiters.entry(ip).or_insert_with(|| {
+        let now = Instant::now();
+        let entry = limiters.entry(ip).or_insert_with(|| {
             let quota = Quota::per_second(
                 NonZeroU32::new(self.config.api_requests_per_second)
                     .unwrap_or(NonZeroU32::new(10).unwrap()),
             );
-            Arc::new(GovernorRateLimiter::direct(quota))
+            IpLimiterEntry {
+                limiter: Arc::new(GovernorRateLimiter::direct(quota)),
+                last_access: now,
+            }
         });
 
-        if limiter.check().is_err() {
+        // 更新最后访问时间（用于 LRU）
+        entry.last_access = now;
+
+        if entry.limiter.check().is_err() {
             tracing::warn!(ip = %ip, "IP-based API rate limit exceeded");
             crate::metrics::record_rate_limit_rejection("api", "ip_limit");
             return Err("Too many requests. Please slow down.".to_string());
@@ -206,11 +220,11 @@ impl RateLimiter {
             });
         }
 
-        // 清理 IP 限制器（保留最近使用的）
+        // 清理 IP 限制器（使用 LRU 策略保留最近使用的）
         {
             let mut limiters = self.ip_limiters.lock();
             // 只保留最近 1500 个 IP 的限制器，防止内存泄漏
-            // 当超过阈值时，随机删除 1/3 而不是全部清空，保持部分限流状态
+            // 当超过阈值时，使用 LRU 策略删除最久未使用的条目
             const MAX_LIMITERS: usize = 1500;
             const CLEANUP_TARGET: usize = 1000;
 
@@ -219,17 +233,22 @@ impl RateLimiter {
                 tracing::info!(
                     current_count = limiters.len(),
                     removing = to_remove,
-                    "Cleaning up IP rate limiters"
+                    "Cleaning up IP rate limiters using LRU strategy"
                 );
 
-                // 收集所有 IP 地址
-                let mut ips: Vec<_> = limiters.keys().copied().collect();
-                // 随机打乱
-                use rand::seq::SliceRandom;
-                ips.shuffle(&mut rand::rng());
-                // 删除前 to_remove 个
-                for ip in ips.iter().take(to_remove) {
+                // 收集所有 IP 及其最后访问时间
+                let mut entries: Vec<_> = limiters
+                    .iter()
+                    .map(|(ip, entry)| (*ip, entry.last_access))
+                    .collect();
+
+                // 按最后访问时间排序（最旧的在前）
+                entries.sort_by_key(|(_, last_access)| *last_access);
+
+                // 删除最久未使用的条目
+                for (ip, _) in entries.iter().take(to_remove) {
                     limiters.remove(ip);
+                    tracing::debug!(ip = %ip, "Removed least recently used IP limiter");
                 }
             }
         }

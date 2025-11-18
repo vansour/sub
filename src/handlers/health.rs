@@ -1,8 +1,10 @@
 use axum::Json;
+use axum::extract::State;
 use axum::http::StatusCode;
 use axum::response::IntoResponse;
 use std::time::Instant;
 
+use crate::AppState;
 use crate::metrics::{self, CheckResult, HealthChecks, HealthStatus};
 use crate::models::ApiResponse;
 
@@ -17,12 +19,12 @@ pub async fn healthz() -> impl IntoResponse {
 }
 
 /// 详细健康检查接口（包含诊断信息）
-pub async fn health_detailed() -> impl IntoResponse {
+pub async fn health_detailed(State(state): State<AppState>) -> impl IntoResponse {
     let start = Instant::now();
     let mut overall_status = "healthy";
 
     // 检查数据存储
-    let storage_check = check_data_storage().await;
+    let storage_check = check_data_storage(&state).await;
     if storage_check.status != "healthy" {
         overall_status = "degraded";
     }
@@ -55,16 +57,22 @@ pub async fn health_detailed() -> impl IntoResponse {
 }
 
 /// 检查数据存储状态
-async fn check_data_storage() -> CheckResult {
+async fn check_data_storage(state: &AppState) -> CheckResult {
     let start = Instant::now();
 
-    // 尝试检查配置文件是否可访问
-    match tokio::fs::metadata("data/data.toml").await {
-        Ok(_) => CheckResult::ok(start.elapsed().as_millis() as u64),
-        Err(e) => CheckResult::unhealthy(
-            format!("Failed to access data storage: {}", e),
-            start.elapsed().as_millis() as u64,
-        ),
+    // 检查数据库连接和查询能力
+    match state.db.health_check().await {
+        Ok(_) => {
+            let latency = start.elapsed().as_millis() as u64;
+            tracing::debug!(latency_ms = latency, "Database health check passed");
+            CheckResult::ok(latency)
+        }
+        Err(e) => {
+            let latency = start.elapsed().as_millis() as u64;
+            tracing::error!(error = %e, latency_ms = latency, "Database health check failed");
+            // 不暴露详细错误信息
+            CheckResult::unhealthy("Database connection failed".to_string(), latency)
+        }
     }
 }
 

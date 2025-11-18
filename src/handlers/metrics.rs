@@ -6,7 +6,7 @@ use prometheus::TextEncoder;
 
 /// 获取 Prometheus 格式的指标
 pub async fn metrics() -> impl IntoResponse {
-    let registry = crate::METRICS_REGISTRY.lock();
+    let registry = crate::get_metrics_registry().lock();
     let encoder = TextEncoder::new();
     let mut buffer = Vec::new();
 

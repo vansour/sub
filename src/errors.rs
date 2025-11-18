@@ -18,8 +18,6 @@ pub enum AppError {
     Conflict(String),
     /// 内部服务器错误
     InternalError(String),
-    /// 外部服务错误
-    ExternalServiceError(String),
 }
 
 impl IntoResponse for AppError {
@@ -37,10 +35,6 @@ impl IntoResponse for AppError {
             AppError::InternalError(msg) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 ErrorDetail::internal_error(msg),
-            ),
-            AppError::ExternalServiceError(msg) => (
-                StatusCode::BAD_GATEWAY,
-                ErrorDetail::external_service_error("外部服务", msg),
             ),
         };
 
@@ -87,9 +81,32 @@ impl std::fmt::Display for AppError {
             AppError::NotFound(msg) => write!(f, "Not found: {}", msg),
             AppError::Conflict(msg) => write!(f, "Conflict: {}", msg),
             AppError::InternalError(msg) => write!(f, "Internal error: {}", msg),
-            AppError::ExternalServiceError(msg) => write!(f, "External service error: {}", msg),
         }
     }
 }
 
 pub type AppResult<T> = Result<T, AppError>;
+
+/// 安全的数据库错误处理辅助函数
+/// 在生产环境中隐藏敏感的错误详情，仅记录到日志
+pub fn handle_db_error(operation: &str, error: impl std::fmt::Display) -> AppError {
+    // 记录详细错误到日志（包含敏感信息）
+    tracing::error!(
+        operation = operation,
+        error = %error,
+        "Database operation failed"
+    );
+
+    // 返回通用错误消息（不包含敏感信息）
+    #[cfg(debug_assertions)]
+    {
+        // 开发环境：返回详细错误便于调试
+        AppError::InternalError(format!("{}: {}", operation, error))
+    }
+
+    #[cfg(not(debug_assertions))]
+    {
+        // 生产环境：返回通用错误，避免信息泄露
+        AppError::InternalError(format!("Database operation failed: {}", operation))
+    }
+}

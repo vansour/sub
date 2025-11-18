@@ -2212,7 +2212,6 @@ dependencies = [
  "futures",
  "governor",
  "jsonwebtoken",
- "lazy_static",
  "parking_lot",
  "prometheus",
  "rand 0.9.2",

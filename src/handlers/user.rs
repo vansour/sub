@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use crate::{
     AppState,
-    errors::AppError,
+    errors::{AppError, handle_db_error},
     models::{
         ApiResponse, CreateRequest, CreateResponse, InfoResponse, ReorderRequest, UsersResponse,
     },
@@ -43,7 +43,7 @@ async fn get_user_data(
             Ok(user_data)
         }
         Ok(None) => Err(AppError::NotFound(format!("User '{}' not found", username))),
-        Err(e) => Err(AppError::InternalError(format!("Database error: {}", e))),
+        Err(e) => Err(handle_db_error("get_user", e)),
     }
 }
 
@@ -99,7 +99,7 @@ pub async fn create_user(
         .db
         .user_exists(&username)
         .await
-        .map_err(|e| AppError::InternalError(format!("Database error: {}", e)))?;
+        .map_err(|e| handle_db_error("user_exists", e))?;
 
     if user_exists && !payload.allow_overwrite {
         tracing::warn!(
@@ -117,7 +117,7 @@ pub async fn create_user(
         .db
         .get_user(&username)
         .await
-        .map_err(|e| AppError::InternalError(format!("Failed to get user: {}", e)))?
+        .map_err(|e| handle_db_error("get_user", e))?
     {
         existing.order_index
     } else {
@@ -126,7 +126,7 @@ pub async fn create_user(
             .db
             .get_all_users()
             .await
-            .map_err(|e| AppError::InternalError(format!("Failed to get users: {}", e)))?
+            .map_err(|e| handle_db_error("get_all_users", e))?
             .iter()
             .map(|u| u.order_index)
             .max()
@@ -134,24 +134,28 @@ pub async fn create_user(
         max_order + 1
     };
 
-    // 保存到数据库
+    // 缓存双删策略：
+    // 1. 删除缓存（避免并发读取到旧数据）
+    {
+        let mut map = state.store.write();
+        map.remove(&username);
+    }
+
+    // 2. 保存到数据库
     state
         .db
         .upsert_user(&username, &valid_urls, order)
         .await
-        .map_err(|e| AppError::InternalError(format!("Failed to save user: {}", e)))?;
+        .map_err(|e| handle_db_error("upsert_user", e))?;
 
-    // 更新内存缓存
+    // 3. 再次删除缓存（确保不会有延迟写入的旧数据）
+    // 等待一小段时间后删除，让正在进行的读操作完成
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     {
         let mut map = state.store.write();
-        map.insert(
-            username.clone(),
-            crate::models::UserData {
-                urls: valid_urls.clone(),
-                order: order as usize,
-            },
-        );
+        map.remove(&username);
     }
+    // 注意：下次读取时会从数据库加载最新数据到缓存
 
     tracing::info!(
         username = %username,
@@ -210,7 +214,7 @@ pub async fn list_users(State(state): State<AppState>) -> Result<impl IntoRespon
         .db
         .get_all_users()
         .await
-        .map_err(|e| AppError::InternalError(format!("Failed to get users: {}", e)))?;
+        .map_err(|e| handle_db_error("get_all_users", e))?;
 
     // 转换为 API 响应格式
     let users: Vec<_> = db_users
@@ -233,19 +237,26 @@ pub async fn delete_user(
 ) -> Result<impl IntoResponse, AppError> {
     tracing::info!(username = %username, "delete_user request received");
 
+    // 缓存双删策略：先删除缓存
+    {
+        let mut map = state.store.write();
+        map.remove(&username);
+    }
+
     // 从数据库删除
     let deleted = state
         .db
         .delete_user(&username)
         .await
-        .map_err(|e| AppError::InternalError(format!("Failed to delete user: {}", e)))?;
+        .map_err(|e| handle_db_error("delete_user", e))?;
 
     if !deleted {
         tracing::warn!(username = %username, "user not found for deletion");
         return Err(AppError::NotFound(format!("User '{}' not found", username)));
     }
 
-    // 从缓存中删除
+    // 再次删除缓存
+    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
     {
         let mut map = state.store.write();
         map.remove(&username);
@@ -284,7 +295,7 @@ pub async fn reorder_users(
         .db
         .update_user_orders(&order_map)
         .await
-        .map_err(|e| AppError::InternalError(format!("Failed to update orders: {}", e)))?;
+        .map_err(|e| handle_db_error("update_user_orders", e))?;
 
     // 更新缓存中的排序
     {
@@ -325,18 +336,22 @@ pub async fn redirect_short(
 
     // 使用共享的 HTTP 客户端
     let client = &state.http_client;
+    let config = &state.http_client_config;
 
-    // 并发抓取所有 URL，每个 URL 最多重试 2 次
-    const MAX_RETRIES: usize = 2;
-    const MAX_CONCURRENT: usize = 10;
+    // 从配置中读取参数
+    let max_retries = config.max_retries;
+    let max_concurrent = config.max_concurrent;
+    let total_timeout_secs = config.total_timeout_secs;
+    let backoff_base_ms = config.backoff_base_ms;
 
-    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(MAX_CONCURRENT));
+    let semaphore = std::sync::Arc::new(tokio::sync::Semaphore::new(max_concurrent));
 
     tracing::debug!(
         username = %username,
         url_count = urls.len(),
-        max_concurrent = MAX_CONCURRENT,
-        max_retries = MAX_RETRIES,
+        max_concurrent = max_concurrent,
+        max_retries = max_retries,
+        total_timeout_secs = total_timeout_secs,
         "starting concurrent URL fetches"
     );
 
@@ -353,7 +368,7 @@ pub async fn redirect_short(
                 let mut attempt = 0;
                 let mut last_error = String::new();
 
-                while attempt <= MAX_RETRIES {
+                while attempt <= max_retries {
                     attempt += 1;
                     match client.get(&url).send().await {
                         Ok(resp) => match resp.error_for_status() {
@@ -388,8 +403,8 @@ pub async fn redirect_short(
                         }
                     }
 
-                    if attempt <= MAX_RETRIES {
-                        let backoff_ms = 200 * (1 << (attempt - 1));
+                    if attempt <= max_retries {
+                        let backoff_ms = backoff_base_ms * (1 << (attempt - 1));
                         tracing::debug!(
                             url = %url,
                             attempt = attempt,
@@ -402,7 +417,7 @@ pub async fn redirect_short(
 
                 tracing::warn!(
                     url = %url,
-                    attempts = MAX_RETRIES + 1,
+                    attempts = max_retries + 1,
                     error = %last_error,
                     "failed to fetch URL after all retries"
                 );
@@ -411,7 +426,25 @@ pub async fn redirect_short(
         })
         .collect();
 
-    let results = futures::future::join_all(fetch_tasks).await;
+    // 使用 timeout 包装整个抓取过程，防止长时间阻塞
+    let results = match tokio::time::timeout(
+        Duration::from_secs(total_timeout_secs),
+        futures::future::join_all(fetch_tasks),
+    )
+    .await
+    {
+        Ok(results) => results,
+        Err(_) => {
+            tracing::error!(
+                username = %username,
+                timeout_secs = total_timeout_secs,
+                "URL fetching timed out"
+            );
+            return Err(AppError::InternalError(
+                "Request timeout: URL fetching took too long".to_string(),
+            ));
+        }
+    };
 
     let bodies: Vec<String> = results
         .into_iter()
@@ -425,7 +458,7 @@ pub async fn redirect_short(
             successful = bodies.len(),
             "all URL fetches failed"
         );
-        return Err(AppError::ExternalServiceError(
+        return Err(AppError::InternalError(
             "Failed to fetch content from provided URLs".to_string(),
         ));
     }

@@ -2,6 +2,26 @@
 host = "0.0.0.0"
 port = 8080
 
+[http_client]
+# URL 抓取配置
+# 每个 URL 最大重试次数
+max_retries = 2
+# 最大并发请求数
+max_concurrent = 10
+# 总超时时间（秒）
+total_timeout_secs = 30
+# 重试退避初始延迟（毫秒）
+backoff_base_ms = 200
+# HTTP 客户端超时配置
+# 单个请求超时（秒）
+request_timeout_secs = 30
+# 连接超时（秒）
+connect_timeout_secs = 10
+# 连接池空闲超时（秒）
+pool_idle_timeout_secs = 90
+# 每个主机最大空闲连接数
+pool_max_idle_per_host = 10
+
 [rate_limit]
 # 登录尝试限制：每个 IP 每分钟最多尝试次数
 login_attempts_per_minute = 5

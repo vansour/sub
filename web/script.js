@@ -1,5 +1,108 @@
 const base = window.location.origin;
 
+// ============================================
+// 全局加载状态管理
+// ============================================
+let activeRequests = 0;
+let loadingTimer = null;
+
+function showGlobalLoading() {
+	activeRequests++;
+	
+	// 延迟显示加载指示器，避免闪烁（请求很快完成时）
+	if (loadingTimer) clearTimeout(loadingTimer);
+	
+	loadingTimer = setTimeout(() => {
+		if (activeRequests > 0) {
+			const loader = document.getElementById('globalLoader');
+			if (loader) {
+				loader.style.display = 'flex';
+			}
+		}
+	}, 200); // 200ms 后才显示加载指示器
+}
+
+function hideGlobalLoading() {
+	activeRequests--;
+	
+	if (activeRequests <= 0) {
+		activeRequests = 0;
+		if (loadingTimer) {
+			clearTimeout(loadingTimer);
+			loadingTimer = null;
+		}
+		const loader = document.getElementById('globalLoader');
+		if (loader) {
+			loader.style.display = 'none';
+		}
+	}
+}
+
+// ============================================
+// 错误消息国际化
+// ============================================
+const ERROR_MESSAGES = {
+	// HTTP 状态码
+	400: '请求参数错误',
+	401: '未授权，请重新登录',
+	403: '没有权限访问',
+	404: '请求的资源不存在',
+	409: '资源冲突',
+	429: '请求过于频繁，请稍后再试',
+	500: '服务器内部错误',
+	502: '网关错误',
+	503: '服务暂时不可用',
+	504: '网关超时',
+	
+	// 业务错误
+	'network_error': '网络连接失败，请检查网络',
+	'timeout': '请求超时，请重试',
+	'unauthorized': '登录已过期，请重新登录',
+	'validation_error': '输入数据格式错误',
+	'user_exists': '用户名已存在',
+	'user_not_found': '用户不存在',
+	'invalid_url': '链接格式无效',
+	'invalid_username': '用户名格式无效',
+	'too_many_urls': '链接数量超过限制',
+	'password_too_short': '密码长度不足',
+	'password_mismatch': '两次输入的密码不一致',
+	
+	// 默认错误
+	'default': '操作失败，请重试'
+};
+
+function getErrorMessage(error, defaultMsg = null) {
+	// 如果是 HTTP 状态码
+	if (typeof error === 'number') {
+		return ERROR_MESSAGES[error] || defaultMsg || `请求失败 (${error})`;
+	}
+	
+	// 如果是错误对象
+	if (error instanceof Error) {
+		if (error.message === 'Failed to fetch' || error.message.includes('NetworkError')) {
+			return ERROR_MESSAGES['network_error'];
+		}
+		if (error.message === 'Unauthorized') {
+			return ERROR_MESSAGES['unauthorized'];
+		}
+		return error.message;
+	}
+	
+	// 如果是字符串
+	if (typeof error === 'string') {
+		// 尝试匹配已知错误
+		const lowerError = error.toLowerCase();
+		for (const [key, message] of Object.entries(ERROR_MESSAGES)) {
+			if (lowerError.includes(key.replace('_', ' '))) {
+				return message;
+			}
+		}
+		return error;
+	}
+	
+	return defaultMsg || ERROR_MESSAGES['default'];
+}
+
 // 认证检查
 function checkAuth() {
 	const token = localStorage.getItem('auth_token');
@@ -19,8 +122,11 @@ function getAuthHeader() {
 // 处理 API 错误（如401未授权）
 function handleApiError(resp) {
 	if (resp.status === 401) {
+		showNotification(ERROR_MESSAGES[401], 'error');
 		localStorage.removeItem('auth_token');
-		window.location.href = '/static/login.html';
+		setTimeout(() => {
+			window.location.href = '/static/login.html';
+		}, 1000);
 		return true;
 	}
 	return false;
@@ -37,18 +143,30 @@ checkAuth();
 
 // 统一的 API 请求函数
 async function apiRequest(url, options = {}) {
-	const headers = {
-		...getAuthHeader(),
-		...options.headers
-	};
-	
-	const resp = await fetch(url, { ...options, headers });
-	
-	if (handleApiError(resp)) {
-		throw new Error('Unauthorized');
+	// 显示全局加载指示器（除非明确禁用）
+	const showLoading = options.showLoading !== false;
+	if (showLoading) {
+		showGlobalLoading();
 	}
 	
-	return resp;
+	try {
+		const headers = {
+			...getAuthHeader(),
+			...options.headers
+		};
+		
+		const resp = await fetch(url, { ...options, headers });
+		
+		if (handleApiError(resp)) {
+			throw new Error('Unauthorized');
+		}
+		
+		return resp;
+	} finally {
+		if (showLoading) {
+			hideGlobalLoading();
+		}
+	}
 }
 
 // 通知系统
@@ -272,12 +390,9 @@ async function loadUserList() {
 		displayUserList(users);
 	} catch (error) {
 		console.error("加载用户列表失败:", error);
-		showErrorState(
-			listDiv,
-			`加载失败: ${error.message}`,
-			true
-		);
-		showNotification('加载用户列表失败，请重试', 'error');
+		const errorMsg = getErrorMessage(error, '加载用户列表失败');
+		showErrorState(listDiv, errorMsg, true);
+		showNotification(errorMsg, 'error');
 	}
 }
 
@@ -452,11 +567,13 @@ async function saveUserOrder(usernames) {
 			showNotification('顺序已保存', 'success');
 		} else {
 			console.error('保存顺序失败:', resp.status);
-			showNotification('保存顺序失败', 'error');
+			const errorMsg = getErrorMessage(resp.status, '保存顺序失败');
+			showNotification(errorMsg, 'error');
 		}
 	} catch (error) {
 		console.error('保存顺序时出错:', error);
-		showNotification('保存顺序失败', 'error');
+		const errorMsg = getErrorMessage(error, '保存顺序失败');
+		showNotification(errorMsg, 'error');
 	}
 }
 
@@ -477,7 +594,8 @@ async function deleteUser(username) {
 			});
 			
 			if (!resp.ok) {
-				showNotification('删除失败: ' + resp.status, 'error');
+				const errorMsg = getErrorMessage(resp.status, '删除用户失败');
+				showNotification(errorMsg, 'error');
 				return;
 			}
 			
@@ -486,7 +604,8 @@ async function deleteUser(username) {
 			showNotification(`用户 "${username}" 已删除`, 'success');
 		} catch (error) {
 			console.error("删除失败:", error);
-			showNotification('删除失败: ' + error.message, 'error');
+			const errorMsg = getErrorMessage(error, '删除用户失败');
+			showNotification(errorMsg, 'error');
 		}
 	});
 }
@@ -557,13 +676,14 @@ document.getElementById("form").addEventListener("submit", async (e) => {
 			let errorMessage = '创建失败';
 			try {
 				const errorData = await resp.json();
-				errorMessage = errorData.error || errorMessage;
+				// 优先使用后端返回的错误消息
+				errorMessage = errorData.error || errorData.message || getErrorMessage(resp.status, '创建失败');
 				if (errorData.hint) {
 					errorMessage += ` (${errorData.hint})`;
 				}
 			} catch (e) {
-				// 如果响应不是 JSON，使用状态码
-				errorMessage = `创建失败: HTTP ${resp.status}`;
+				// 如果响应不是 JSON，使用友好的状态码消息
+				errorMessage = getErrorMessage(resp.status, '创建失败');
 			}
 			console.error("创建失败:", errorMessage);
 			showNotification(errorMessage, 'error');
@@ -586,7 +706,8 @@ document.getElementById("form").addEventListener("submit", async (e) => {
 		closeModal();
 	} catch (error) {
 		console.error("请求异常:", error);
-		showNotification('请求失败: ' + error.message, 'error');
+		const errorMsg = getErrorMessage(error, '操作失败');
+		showNotification(errorMsg, 'error');
 	}
 });
 
@@ -637,10 +758,17 @@ document.getElementById("settingsForm").addEventListener("submit", async (e) => 
 				logout();
 			}, 1500);
 		} else {
-			const error = await resp.json();
-			showNotification(error.error || '保存失败', 'error');
+			try {
+				const error = await resp.json();
+				const errorMsg = error.error || error.message || getErrorMessage(resp.status, '保存设置失败');
+				showNotification(errorMsg, 'error');
+			} catch (e) {
+				showNotification(getErrorMessage(resp.status, '保存设置失败'), 'error');
+			}
 		}
 	} catch (error) {
-		showNotification('保存失败: ' + error.message, 'error');
+		console.error('保存设置失败:', error);
+		const errorMsg = getErrorMessage(error, '保存设置失败');
+		showNotification(errorMsg, 'error');
 	}
 });

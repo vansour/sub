@@ -2,14 +2,19 @@ use crate::config;
 use crate::errors::{AppError, AppResult};
 use crate::metrics;
 use crate::utils::{hash_password, verify_password};
-use std::io::Write;
+use std::sync::OnceLock;
 
 // 常量时间 dummy hash，用于防止时序攻击
-lazy_static::lazy_static! {
-    static ref DUMMY_PASSWORD_HASH: String = {
-        bcrypt::hash("dummy_password_for_timing_attack_prevention", bcrypt::DEFAULT_COST)
-            .unwrap_or_else(|_| "$2b$12$dummyhashfortimingattackprevention".to_string())
-    };
+static DUMMY_PASSWORD_HASH: OnceLock<String> = OnceLock::new();
+
+fn get_dummy_password_hash() -> &'static str {
+    DUMMY_PASSWORD_HASH.get_or_init(|| {
+        bcrypt::hash(
+            "dummy_password_for_timing_attack_prevention",
+            bcrypt::DEFAULT_COST,
+        )
+        .unwrap_or_else(|_| "$2b$12$dummyhashfortimingattackprevention".to_string())
+    })
 }
 
 pub struct AuthService;
@@ -26,7 +31,7 @@ impl AuthService {
         if username != config_username {
             tracing::warn!("login failed for username: {} (user not found)", username);
             // 为了防止时序攻击，即使用户名不存在也进行哈希验证
-            let _ = verify_password(password, &DUMMY_PASSWORD_HASH);
+            let _ = verify_password(password, get_dummy_password_hash());
             metrics::record_auth_attempt(false);
             return Err(AppError::AuthenticationError(
                 "Invalid username or password".to_string(),
@@ -75,78 +80,69 @@ impl AuthService {
             secret: "".to_string(), // 不更新 secret
         })
     }
+}
 
-    /// 保存认证配置到文件
-    pub fn save_config(auth: &config::AuthConfig) -> AppResult<()> {
-        tracing::debug!(username = %auth.username, "saving auth config to file");
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        // 读取现有配置
-        let content = match std::fs::read_to_string("config/config.toml") {
-            Ok(c) => {
-                tracing::debug!("config.toml read successfully");
-                c
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "failed to read config.toml");
-                return Err(e.into());
-            }
-        };
+    #[test]
+    fn test_verify_credentials_success() {
+        let password = "test_password";
+        let hash = crate::utils::hash_password(password).unwrap();
 
-        let mut config: toml::Value = match toml::from_str(&content) {
-            Ok(c) => {
-                tracing::debug!("config.toml parsed successfully");
-                c
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "failed to parse config.toml");
-                return Err(e.into());
-            }
-        };
+        let result = AuthService::verify_credentials("admin", password, "admin", &hash);
+        assert!(result.is_ok());
+    }
 
-        // 更新 auth 部分
-        if let Some(auth_section) = config.get_mut("auth").and_then(|v| v.as_table_mut()) {
-            auth_section.insert(
-                "username".to_string(),
-                toml::Value::String(auth.username.clone()),
-            );
-            auth_section.insert(
-                "password_hash".to_string(),
-                toml::Value::String(auth.password_hash.clone()),
-            );
-            // 移除旧的明文密码字段（如果存在）
-            auth_section.remove("password");
-            tracing::debug!(username = %auth.username, "auth config updated in memory");
-        }
+    #[test]
+    fn test_verify_credentials_wrong_username() {
+        let password = "test_password";
+        let hash = crate::utils::hash_password(password).unwrap();
 
-        // 写回文件
-        let toml_string = match toml::to_string_pretty(&config) {
-            Ok(s) => {
-                tracing::debug!(size_bytes = s.len(), "TOML serialized successfully");
-                s
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "failed to serialize TOML");
-                return Err(e.into());
-            }
-        };
+        let result = AuthService::verify_credentials("wrong", password, "admin", &hash);
+        assert!(result.is_err());
+    }
 
-        match std::fs::File::create("config/config.toml") {
-            Ok(mut file) => {
-                if let Err(e) = file.write_all(toml_string.as_bytes()) {
-                    tracing::error!(error = %e, "failed to write to config.toml");
-                    return Err(e.into());
-                }
-                if let Err(e) = file.sync_all() {
-                    tracing::error!(error = %e, "failed to sync config.toml to disk");
-                    return Err(e.into());
-                }
-                tracing::info!(username = %auth.username, "auth config saved successfully");
-                Ok(())
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "failed to create config.toml");
-                Err(e.into())
-            }
-        }
+    #[test]
+    fn test_verify_credentials_wrong_password() {
+        let password = "test_password";
+        let hash = crate::utils::hash_password(password).unwrap();
+
+        let result = AuthService::verify_credentials("admin", "wrong", "admin", &hash);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_update_config() {
+        let old_password = "old_pass";
+        let old_hash = crate::utils::hash_password(old_password).unwrap();
+
+        let result =
+            AuthService::update_config(old_password, "new_admin", "new_pass", "admin", &old_hash);
+
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.username, "new_admin");
+        assert!(crate::utils::verify_password(
+            "new_pass",
+            &config.password_hash
+        ));
+    }
+
+    #[test]
+    fn test_update_config_wrong_old_password() {
+        let old_password = "old_pass";
+        let old_hash = crate::utils::hash_password(old_password).unwrap();
+
+        let result = AuthService::update_config(
+            "wrong_old_pass",
+            "new_admin",
+            "new_pass",
+            "admin",
+            &old_hash,
+        );
+
+        assert!(result.is_err());
     }
 }

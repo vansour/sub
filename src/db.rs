@@ -1,6 +1,7 @@
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 use std::str::FromStr;
+use std::time::Duration;
 
 /// 数据库连接池
 #[derive(Clone)]
@@ -33,10 +34,25 @@ impl Database {
             .synchronous(sqlx::sqlite::SqliteSynchronous::Normal);
 
         // 创建连接池
+        // SQLite 在 WAL 模式下支持多个并发读取，增加连接数可提升性能
+        let max_connections = std::env::var("DB_MAX_CONNECTIONS")
+            .ok()
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(20); // 默认 20 个连接
+
         let pool = SqlitePoolOptions::new()
-            .max_connections(5)
+            .max_connections(max_connections)
+            .min_connections(2) // 保持最少 2 个活跃连接
+            .acquire_timeout(Duration::from_secs(10)) // 获取连接超时 10 秒
+            .idle_timeout(Duration::from_secs(600)) // 空闲连接 10 分钟后关闭
+            .max_lifetime(Duration::from_secs(3600)) // 连接最大生命周期 1 小时
             .connect_with(options)
             .await?;
+
+        tracing::info!(
+            max_connections = max_connections,
+            "Database connection pool initialized"
+        );
 
         let db = Database { pool };
 
@@ -204,34 +220,21 @@ impl Database {
         let mut tx = self.pool.begin().await?;
         let now = chrono::Utc::now().timestamp();
 
-        // 批量更新：使用 CASE WHEN 语句一次性更新所有记录
-        let usernames: Vec<&String> = order_map.keys().collect();
-        let mut case_clauses = Vec::new();
-
-        for username in &usernames {
-            if let Some(order) = order_map.get(*username) {
-                case_clauses.push(format!(
-                    "WHEN username = '{}' THEN {}",
-                    username.replace("'", "''"),
-                    order
-                ));
-            }
-        }
-
-        if !case_clauses.is_empty() {
-            let case_sql = case_clauses.join(" ");
-            let sql = format!(
-                "UPDATE users SET order_index = CASE {} END, updated_at = {} WHERE username IN ({})",
-                case_sql,
-                now,
-                usernames
-                    .iter()
-                    .map(|u| format!("'{}'", u.replace("'", "''")))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-
-            sqlx::query(&sql).execute(&mut *tx).await?;
+        // 使用参数化查询逐个更新，避免 SQL 注入风险
+        // 虽然比 CASE WHEN 慢一些，但更安全
+        for (username, order_index) in order_map.iter() {
+            sqlx::query(
+                r#"
+                UPDATE users 
+                SET order_index = ?, updated_at = ? 
+                WHERE username = ?
+                "#,
+            )
+            .bind(order_index)
+            .bind(now)
+            .bind(username)
+            .execute(&mut *tx)
+            .await?;
         }
 
         tx.commit().await?;

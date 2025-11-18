@@ -91,13 +91,6 @@ pub fn is_valid_username(username: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 验证 URL 是否有效（无安全配置）
-/// 检查: scheme 必须是 http/https, 长度限制, 不能为空白, 不包含危险字符
-#[allow(dead_code)]
-pub fn is_valid_url(url: &str) -> bool {
-    is_valid_url_with_security(url, false, false)
-}
-
 /// 验证 URL 是否有效（带安全配置）
 pub fn is_valid_url_with_security(
     url: &str,
@@ -135,39 +128,90 @@ pub fn is_valid_url_with_security(
         }
 
         // 检查 host 是否为 localhost 或私有 IP（防止 SSRF 攻击）
-        if let Some(host) = parsed.host_str() {
-            let host_lower = host.to_lowercase();
+        // 使用 host() 而不是 host_str() 来正确处理 IPv6 地址
+        let host_lower = if let Some(host) = parsed.host() {
+            match host {
+                url::Host::Domain(domain) => domain.to_lowercase(),
+                url::Host::Ipv4(ip) => ip.to_string(),
+                url::Host::Ipv6(ip) => ip.to_string(),
+            }
+        } else {
+            return false;
+        };
 
-            // 阻止访问 localhost（除非明确允许）
-            if !allow_localhost
-                && (host_lower == "localhost"
-                    || host_lower == "127.0.0.1"
-                    || host_lower == "::1"
-                    || host_lower.starts_with("127."))
+        // 阻止访问 localhost（除非明确允许）
+        if !allow_localhost
+            && (host_lower == "localhost"
+                || host_lower == "127.0.0.1"
+                || host_lower == "::1"
+                || host_lower.starts_with("127."))
+        {
+            return false;
+        }
+
+        // 阻止访问私有 IP 段和保留地址（除非明确允许）
+        if !allow_private_ips {
+            // RFC 1918 私有网络
+            if host_lower.starts_with("10.")
+                || host_lower.starts_with("192.168.")
+                || host_lower.starts_with("172.16.")
+                || host_lower.starts_with("172.17.")
+                || host_lower.starts_with("172.18.")
+                || host_lower.starts_with("172.19.")
+                || host_lower.starts_with("172.20.")
+                || host_lower.starts_with("172.21.")
+                || host_lower.starts_with("172.22.")
+                || host_lower.starts_with("172.23.")
+                || host_lower.starts_with("172.24.")
+                || host_lower.starts_with("172.25.")
+                || host_lower.starts_with("172.26.")
+                || host_lower.starts_with("172.27.")
+                || host_lower.starts_with("172.28.")
+                || host_lower.starts_with("172.29.")
+                || host_lower.starts_with("172.30.")
+                || host_lower.starts_with("172.31.")
             {
                 return false;
             }
 
-            // 阻止访问私有 IP 段（除非明确允许）
-            if !allow_private_ips
-                && (host_lower.starts_with("10.")
-                    || host_lower.starts_with("192.168.")
-                    || host_lower.starts_with("172.16.")
-                    || host_lower.starts_with("172.17.")
-                    || host_lower.starts_with("172.18.")
-                    || host_lower.starts_with("172.19.")
-                    || host_lower.starts_with("172.20.")
-                    || host_lower.starts_with("172.21.")
-                    || host_lower.starts_with("172.22.")
-                    || host_lower.starts_with("172.23.")
-                    || host_lower.starts_with("172.24.")
-                    || host_lower.starts_with("172.25.")
-                    || host_lower.starts_with("172.26.")
-                    || host_lower.starts_with("172.27.")
-                    || host_lower.starts_with("172.28.")
-                    || host_lower.starts_with("172.29.")
-                    || host_lower.starts_with("172.30.")
-                    || host_lower.starts_with("172.31."))
+            // Link-Local 地址 (169.254.0.0/16)
+            if host_lower.starts_with("169.254.") {
+                return false;
+            }
+
+            // 保留地址和特殊用途地址
+            if host_lower.starts_with("0.")  // 0.0.0.0/8
+                    || host_lower == "0.0.0.0"
+                    || host_lower.starts_with("224.")  // 224.0.0.0/4 组播
+                    || host_lower.starts_with("225.")
+                    || host_lower.starts_with("226.")
+                    || host_lower.starts_with("227.")
+                    || host_lower.starts_with("228.")
+                    || host_lower.starts_with("229.")
+                    || host_lower.starts_with("230.")
+                    || host_lower.starts_with("231.")
+                    || host_lower.starts_with("232.")
+                    || host_lower.starts_with("233.")
+                    || host_lower.starts_with("234.")
+                    || host_lower.starts_with("235.")
+                    || host_lower.starts_with("236.")
+                    || host_lower.starts_with("237.")
+                    || host_lower.starts_with("238.")
+                    || host_lower.starts_with("239.")
+                    || host_lower.starts_with("240.")  // 240.0.0.0/4 保留
+                    || host_lower.starts_with("255.")
+            // 广播
+            {
+                return false;
+            }
+
+            // IPv6 私有和特殊地址
+            if host_lower.starts_with("fc")  // fc00::/7 唯一本地地址
+                    || host_lower.starts_with("fd")
+                    || host_lower.starts_with("fe80:")  // fe80::/10 链路本地
+                    || host_lower.starts_with("ff")  // ff00::/8 组播
+                    || host_lower == "::"
+            // 未指定地址
             {
                 return false;
             }
@@ -402,6 +446,68 @@ mod tests {
             false,
             true
         ));
+
+        // 测试 Link-Local 地址阻止
+        assert!(!is_valid_url_with_security(
+            "http://169.254.1.1",
+            false,
+            false
+        ));
+        assert!(!is_valid_url_with_security(
+            "http://169.254.169.254",
+            false,
+            false
+        )); // AWS metadata
+
+        // 测试保留地址阻止
+        assert!(!is_valid_url_with_security("http://0.0.0.0", false, false));
+        assert!(!is_valid_url_with_security("http://0.1.2.3", false, false));
+
+        // 测试组播地址阻止
+        assert!(!is_valid_url_with_security(
+            "http://224.0.0.1",
+            false,
+            false
+        ));
+        assert!(!is_valid_url_with_security(
+            "http://239.255.255.255",
+            false,
+            false
+        ));
+
+        // 测试广播和保留地址
+        assert!(!is_valid_url_with_security(
+            "http://255.255.255.255",
+            false,
+            false
+        ));
+        assert!(!is_valid_url_with_security(
+            "http://240.0.0.1",
+            false,
+            false
+        ));
+
+        // 测试 IPv6 私有地址阻止
+        assert!(!is_valid_url_with_security(
+            "http://[fc00::1]",
+            false,
+            false
+        )); // ULA
+        assert!(!is_valid_url_with_security(
+            "http://[fd00::1]",
+            false,
+            false
+        )); // ULA
+        assert!(!is_valid_url_with_security(
+            "http://[fe80::1]",
+            false,
+            false
+        )); // Link-Local
+        assert!(!is_valid_url_with_security(
+            "http://[ff00::1]",
+            false,
+            false
+        )); // Multicast
     }
 
     #[test]

@@ -113,16 +113,6 @@ impl ErrorDetail {
             validation_errors: None,
         }
     }
-
-    /// 创建外部服务错误
-    pub fn external_service_error(service: impl Into<String>, message: impl Into<String>) -> Self {
-        Self {
-            code: "EXTERNAL_SERVICE_ERROR".to_string(),
-            message: format!("{}: {}", service.into(), message.into()),
-            details: None,
-            validation_errors: None,
-        }
-    }
 }
 
 /// JWT Claims

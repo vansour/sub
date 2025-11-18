@@ -1,10 +1,13 @@
-use std::{collections::HashMap, net::SocketAddr, sync::Arc};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::{Arc, OnceLock},
+};
 
 use axum::{
     Router, middleware as axum_middleware,
     routing::{delete, get, post},
 };
-use lazy_static::lazy_static;
 use parking_lot::RwLock;
 
 mod config;
@@ -22,10 +25,12 @@ use db::Database;
 use models::UserData;
 use rate_limiter::RateLimiter;
 
-lazy_static! {
-    /// 全局 Prometheus 指标注册表
-    pub static ref METRICS_REGISTRY: parking_lot::Mutex<prometheus::Registry> =
-        parking_lot::Mutex::new(metrics::init_metrics());
+/// 全局 Prometheus 指标注册表
+pub static METRICS_REGISTRY: OnceLock<parking_lot::Mutex<prometheus::Registry>> = OnceLock::new();
+
+/// 获取或初始化 Prometheus 指标注册表
+pub fn get_metrics_registry() -> &'static parking_lot::Mutex<prometheus::Registry> {
+    METRICS_REGISTRY.get_or_init(|| parking_lot::Mutex::new(metrics::init_metrics()))
 }
 
 /// 应用状态
@@ -39,8 +44,94 @@ pub struct AppState {
     pub rate_limiter: RateLimiter,
     /// 安全配置
     pub security_config: Arc<config::SecurityConfig>,
+    /// HTTP 客户端配置
+    pub http_client_config: Arc<config::HttpClientConfig>,
     /// 共享的 HTTP 客户端（用于 URL 抓取）
     pub http_client: reqwest::Client,
+}
+
+/// 验证数据库路径是否有效
+fn validate_database_path(path: &str) -> anyhow::Result<()> {
+    use std::path::Path;
+
+    let db_path = Path::new(path);
+
+    // 检查路径是否为绝对路径（推荐）
+    if !db_path.is_absolute() {
+        tracing::warn!(
+            path = path,
+            "Database path is not absolute. This may cause issues in some environments."
+        );
+    }
+
+    // 检查父目录是否存在或可创建
+    if let Some(parent) = db_path.parent() {
+        if !parent.exists() {
+            tracing::info!(
+                dir = %parent.display(),
+                "Database directory does not exist, will create it"
+            );
+            // 尝试创建目录
+            std::fs::create_dir_all(parent).map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to create database directory '{}': {}",
+                    parent.display(),
+                    e
+                )
+            })?;
+        }
+
+        // 检查目录是否可写
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let metadata = std::fs::metadata(parent).map_err(|e| {
+                anyhow::anyhow!(
+                    "Failed to check permissions for '{}': {}",
+                    parent.display(),
+                    e
+                )
+            })?;
+            let permissions = metadata.permissions();
+            if permissions.mode() & 0o200 == 0 {
+                return Err(anyhow::anyhow!(
+                    "Database directory '{}' is not writable",
+                    parent.display()
+                ));
+            }
+        }
+    }
+
+    // 如果数据库文件已存在，检查是否可读写
+    if db_path.exists() {
+        let metadata = std::fs::metadata(db_path)
+            .map_err(|e| anyhow::anyhow!("Failed to check database file '{}': {}", path, e))?;
+
+        if metadata.is_dir() {
+            return Err(anyhow::anyhow!(
+                "Database path '{}' is a directory, not a file",
+                path
+            ));
+        }
+
+        // 检查文件是否可读写
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(db_path)
+            .map_err(|e| {
+                anyhow::anyhow!(
+                    "Database file '{}' exists but is not readable/writable: {}",
+                    path,
+                    e
+                )
+            })?;
+        drop(file);
+
+        tracing::info!(path = path, "Database file exists and is accessible");
+    }
+
+    Ok(())
 }
 
 /// 确保应用状态满足跨线程要求
@@ -62,6 +153,12 @@ async fn main() {
         std::env::var("DATABASE_PATH").unwrap_or_else(|_| "/app/data/sub.db".to_string());
 
     tracing::info!("Using database path: {}", database_path);
+
+    // 验证数据库路径
+    if let Err(e) = validate_database_path(&database_path) {
+        tracing::error!(error = %e, "Database path validation failed");
+        std::process::exit(1);
+    }
 
     // 初始化数据库
     let db = Database::new(&database_path)
@@ -85,16 +182,27 @@ async fn main() {
 
     // 创建共享的 HTTP 客户端（用于所有 URL 抓取）
     let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(
+            cfg.http_client.request_timeout_secs,
+        ))
+        .connect_timeout(std::time::Duration::from_secs(
+            cfg.http_client.connect_timeout_secs,
+        ))
         .user_agent(concat!("sub/", env!("CARGO_PKG_VERSION")))
         .danger_accept_invalid_certs(false)
         .tcp_keepalive(std::time::Duration::from_secs(60))
-        .pool_idle_timeout(std::time::Duration::from_secs(90))
-        .pool_max_idle_per_host(10)
+        .pool_idle_timeout(std::time::Duration::from_secs(
+            cfg.http_client.pool_idle_timeout_secs,
+        ))
+        .pool_max_idle_per_host(cfg.http_client.pool_max_idle_per_host)
         .build()
         .expect("failed to create HTTP client");
-    tracing::info!("Shared HTTP client initialized");
+    tracing::info!(
+        request_timeout_secs = cfg.http_client.request_timeout_secs,
+        connect_timeout_secs = cfg.http_client.connect_timeout_secs,
+        pool_idle_timeout_secs = cfg.http_client.pool_idle_timeout_secs,
+        "Shared HTTP client initialized"
+    );
 
     // 初始化 Rate Limiter
     let rate_limiter = RateLimiter::new(rate_limiter::RateLimiterConfig {
@@ -153,6 +261,7 @@ async fn main() {
         auth_config: Arc::new(RwLock::new(cfg.auth.clone())),
         rate_limiter,
         security_config: Arc::new(cfg.security.clone()),
+        http_client_config: Arc::new(cfg.http_client.clone()),
         http_client,
     };
 
