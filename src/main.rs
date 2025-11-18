@@ -12,7 +12,6 @@ mod config;
 mod db;
 mod errors;
 mod handlers;
-mod log;
 mod metrics;
 mod middleware;
 mod models;
@@ -37,7 +36,6 @@ pub struct AppState {
     pub db: Database,
     /// 内存缓存 (username -> UserData)，用于快速访问
     pub store: Arc<RwLock<HashMap<String, UserData>>>,
-    pub data_file_path: String,
     pub auth_config: Arc<RwLock<config::AuthConfig>>,
     pub rate_limiter: RateLimiter,
 }
@@ -50,12 +48,30 @@ fn _assert_app_state_send_sync() {
 
 #[tokio::main]
 async fn main() {
-    // 加载配置
-    let cfg = config::AppConfig::load().expect("failed to load config/config.toml");
+    // 先初始化基本日志（使用默认配置）
+    tracing_subscriber::fmt()
+        .with_target(false)
+        .with_level(true)
+        .init();
 
-    // 初始化日志
-    log::init_logging(&cfg.log);
-    tracing::info!("starting sub service");
+    // 从环境变量获取数据库路径，默认为 /app/data/sub.db
+    let database_path =
+        std::env::var("DATABASE_PATH").unwrap_or_else(|_| "/app/data/sub.db".to_string());
+
+    tracing::info!("Using database path: {}", database_path);
+
+    // 初始化数据库
+    let db = Database::new(&database_path)
+        .await
+        .expect("failed to initialize database");
+    tracing::info!("Database initialized at {}", database_path);
+
+    // 从数据库和配置文件加载完整配置
+    let cfg = config::AppConfig::load(&db)
+        .await
+        .expect("failed to load config");
+
+    tracing::info!("starting sub service with database backend");
 
     // 设置安全配置（通过环境变量传递给验证函数）
     std::env::set_var(
@@ -107,35 +123,6 @@ async fn main() {
         });
     }
 
-    // 初始化数据库
-    let database_path = format!("sqlite:{}", cfg.data.database_path);
-    let db = match Database::new(&database_path).await {
-        Ok(db) => {
-            tracing::info!(path = %cfg.data.database_path, "Database initialized");
-            db
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to initialize database");
-            panic!("Database initialization failed: {}", e);
-        }
-    };
-
-    // 从 TOML 文件导入现有数据（仅首次运行或迁移）
-    match db.import_from_toml(&cfg.data.data_file_path).await {
-        Ok(count) if count > 0 => {
-            tracing::info!(
-                imported_users = count,
-                "Migrated users from TOML to database"
-            );
-        }
-        Ok(_) => {
-            tracing::debug!("No data to import from TOML file");
-        }
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to import from TOML, continuing with database");
-        }
-    }
-
     // 从数据库加载数据到内存缓存
     let store = Arc::new(RwLock::new(HashMap::new()));
     match db.get_all_users().await {
@@ -163,7 +150,6 @@ async fn main() {
     let state = AppState {
         db,
         store,
-        data_file_path: cfg.data.data_file_path.clone(),
         auth_config: Arc::new(RwLock::new(cfg.auth.clone())),
         rate_limiter,
     };

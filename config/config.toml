@@ -1,14 +1,3 @@
-[auth]
-secret = "e36df2983d312607cd071dba277072c6b2d31260c1eb3e2874bf6be9e6a114d5"
-
-[data]
-dataFilePath = "/app/data/data.toml"
-databasePath = "/app/data/sub.db"
-
-[log]
-level = "info"
-logFilePath = "/app/logs/sub.log"
-
 [server]
 host = "0.0.0.0"
 port = 8080

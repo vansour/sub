@@ -8,6 +8,7 @@ use crate::config::LogConfig;
 /// - 可通过 `config.toml` 的 [log] 配置日志级别和日志文件
 /// - 同时输出到 stdout（方便 `docker logs`）和文件
 /// - 支持结构化日志，包含请求相关的上下文信息
+#[allow(dead_code)]
 pub fn init_logging(cfg: &LogConfig) {
     // 从配置或环境变量构造日志过滤器
     let level = std::env::var("RUST_LOG").unwrap_or_else(|_| cfg.level.clone());

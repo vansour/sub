@@ -6,26 +6,6 @@ pub struct ServerConfig {
     pub port: u16,
 }
 
-#[derive(Debug, Deserialize, Clone)]
-pub struct LogConfig {
-    #[serde(rename = "logFilePath")]
-    pub log_file_path: String,
-    pub level: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct DataConfig {
-    #[serde(rename = "dataFilePath")]
-    pub data_file_path: String,
-    /// SQLite 数据库文件路径
-    #[serde(rename = "databasePath", default = "default_database_path")]
-    pub database_path: String,
-}
-
-fn default_database_path() -> String {
-    "/app/data/sub.db".to_string()
-}
-
 /// 安全配置
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -109,87 +89,9 @@ fn generate_jwt_secret() -> String {
 const ADMIN_USERNAME: &str = "admin";
 const ADMIN_PASSWORD: &str = "admin"; // 启动时会被 hash 化
 
-/// 获取 JWT Secret，优先级：环境变量 > config.toml > 自动生成并保存
-fn get_jwt_secret() -> anyhow::Result<String> {
-    // 1. 环境变量优先（支持用户自定义）
-    if let Ok(secret) = std::env::var("JWT_SECRET") {
-        if !secret.is_empty() && secret != "change-me-to-a-strong-random-secret-in-production" {
-            tracing::info!("Using JWT_SECRET from environment variable");
-            return Ok(secret);
-        }
-    }
-
-    // 2. 尝试从 config.toml 读取已保存的 secret
-    if let Ok(content) = std::fs::read_to_string("config/config.toml") {
-        if let Ok(config) = toml::from_str::<toml::Value>(&content) {
-            if let Some(secret) = config
-                .get("auth")
-                .and_then(|v| v.get("secret"))
-                .and_then(|v| v.as_str())
-            {
-                if !secret.is_empty() {
-                    tracing::info!("Using JWT_SECRET from config file");
-                    return Ok(secret.to_string());
-                }
-            }
-        }
-    }
-
-    // 3. 生成新的 secret 并保存到配置文件
-    let new_secret = generate_jwt_secret();
-    tracing::info!("Generated new random JWT_SECRET and saving to config.toml");
-    save_jwt_secret(&new_secret)?;
-
-    Ok(new_secret)
-}
-
-/// 保存 JWT Secret 到 config.toml
-fn save_jwt_secret(secret: &str) -> anyhow::Result<()> {
-    use std::io::Write;
-
-    let config_path = "config/config.toml";
-
-    // 确保配置目录存在
-    if let Some(parent) = std::path::Path::new(config_path).parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-
-    // 读取现有配置或创建新配置
-    let mut config = if std::path::Path::new(config_path).exists() {
-        let content = std::fs::read_to_string(config_path)?;
-        toml::from_str::<toml::Value>(&content)
-            .unwrap_or_else(|_| toml::Value::Table(Default::default()))
-    } else {
-        toml::Value::Table(Default::default())
-    };
-
-    // 确保 auth section 存在并设置 secret
-    config
-        .as_table_mut()
-        .unwrap()
-        .entry("auth".to_string())
-        .or_insert_with(|| toml::Value::Table(Default::default()))
-        .as_table_mut()
-        .unwrap()
-        .insert(
-            "secret".to_string(),
-            toml::Value::String(secret.to_string()),
-        );
-
-    // 写入文件
-    let toml_string = toml::to_string_pretty(&config)?;
-    let mut file = std::fs::File::create(config_path)?;
-    file.write_all(toml_string.as_bytes())?;
-    file.sync_all()?;
-
-    Ok(())
-}
-
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
     pub server: ServerConfig,
-    pub log: LogConfig,
-    pub data: DataConfig,
     pub auth: AuthConfig,
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
@@ -198,11 +100,9 @@ pub struct AppConfig {
 }
 
 impl AppConfig {
-    pub fn load() -> anyhow::Result<Self> {
-        // 首先检查 JWT_SECRET 环境变量
-        let jwt_secret = get_jwt_secret()?;
-
-        // 首先尝试从 config.toml 加载，如果不存在或格式不对则使用内置默认值
+    /// 从配置文件和数据库加载配置
+    pub async fn load(db: &crate::db::Database) -> anyhow::Result<Self> {
+        // 从 config.toml 加载基本配置，如果不存在或格式不对则使用内置默认值
         let mut cfg = match std::fs::read_to_string("config/config.toml") {
             Ok(content) => match toml::from_str::<AppConfig>(&content) {
                 Ok(c) => c,
@@ -235,10 +135,55 @@ impl AppConfig {
             }
         }
 
-        // 设置 JWT Secret
-        cfg.auth.secret = jwt_secret;
+        // 从数据库获取 JWT Secret
+        cfg.auth.secret = Self::get_jwt_secret_from_db(db).await?;
 
         Ok(cfg)
+    }
+
+    /// 从数据库获取或生成 JWT Secret
+    async fn get_jwt_secret_from_db(db: &crate::db::Database) -> anyhow::Result<String> {
+        // 1. 环境变量优先（支持用户自定义）
+        if let Ok(secret) = std::env::var("JWT_SECRET") {
+            if !secret.is_empty() && secret != "change-me-to-a-strong-random-secret-in-production" {
+                tracing::info!("Using JWT_SECRET from environment variable");
+                // 保存到数据库以便下次使用
+                let _ = db.set_config("jwt_secret", &secret).await;
+                return Ok(secret);
+            }
+        }
+
+        // 2. 尝试从数据库读取
+        if let Some(secret) = db.get_config("jwt_secret").await? {
+            if !secret.is_empty() {
+                tracing::info!("Using JWT_SECRET from database");
+                return Ok(secret);
+            }
+        }
+
+        // 3. 尝试从旧的 config.toml 迁移
+        if let Ok(content) = std::fs::read_to_string("config/config.toml") {
+            if let Ok(config) = toml::from_str::<toml::Value>(&content) {
+                if let Some(secret) = config
+                    .get("auth")
+                    .and_then(|v| v.get("secret"))
+                    .and_then(|v| v.as_str())
+                {
+                    if !secret.is_empty() {
+                        tracing::info!("Migrating JWT_SECRET from config.toml to database");
+                        db.set_config("jwt_secret", secret).await?;
+                        return Ok(secret.to_string());
+                    }
+                }
+            }
+        }
+
+        // 4. 生成新的 secret 并保存到数据库
+        let new_secret = generate_jwt_secret();
+        tracing::info!("Generated new random JWT_SECRET and saving to database");
+        db.set_config("jwt_secret", &new_secret).await?;
+
+        Ok(new_secret)
     }
 
     /// 使用内置默认凭证创建配置
@@ -250,14 +195,6 @@ impl AppConfig {
             server: ServerConfig {
                 host: "0.0.0.0".to_string(),
                 port: 8080,
-            },
-            log: LogConfig {
-                log_file_path: "/app/logs/v-ui.log".to_string(),
-                level: "info".to_string(),
-            },
-            data: DataConfig {
-                data_file_path: "/app/data/data.toml".to_string(),
-                database_path: default_database_path(),
             },
             auth: AuthConfig {
                 username: ADMIN_USERNAME.to_string(),

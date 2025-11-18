@@ -48,6 +48,7 @@ impl Database {
 
     /// 初始化数据库表结构
     async fn init_schema(&self) -> anyhow::Result<()> {
+        // 创建用户表
         sqlx::query(
             r#"
             CREATE TABLE IF NOT EXISTS users (
@@ -55,6 +56,19 @@ impl Database {
                 urls TEXT NOT NULL,
                 order_index INTEGER NOT NULL DEFAULT 0,
                 created_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now')),
+                updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
+            )
+            "#,
+        )
+        .execute(&self.pool)
+        .await?;
+
+        // 创建配置表
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS config (
+                key TEXT PRIMARY KEY NOT NULL,
+                value TEXT NOT NULL,
                 updated_at INTEGER NOT NULL DEFAULT (strftime('%s', 'now'))
             )
             "#,
@@ -225,46 +239,40 @@ impl Database {
         Ok(count > 0)
     }
 
-    /// 从 TOML 文件导入数据（用于迁移）
-    pub async fn import_from_toml(&self, toml_path: &str) -> anyhow::Result<usize> {
-        if !std::path::Path::new(toml_path).exists() {
-            tracing::info!("TOML file not found, skipping import: {}", toml_path);
-            return Ok(0);
-        }
-
-        let content = tokio::fs::read_to_string(toml_path).await?;
-        let data: toml::Value = toml::from_str(&content)?;
-
-        let mut imported = 0;
-
-        if let Some(links) = data.get("links").and_then(|v| v.as_array()) {
-            for link in links {
-                if let (Some(username), Some(urls)) = (
-                    link.get("username").and_then(|v| v.as_str()),
-                    link.get("urls").and_then(|v| v.as_array()),
-                ) {
-                    let url_list: Vec<String> = urls
-                        .iter()
-                        .filter_map(|u| u.as_str().map(String::from))
-                        .collect();
-
-                    if !url_list.is_empty() {
-                        let order = link.get("order").and_then(|v| v.as_integer()).unwrap_or(0);
-
-                        self.upsert_user(username, &url_list, order).await?;
-                        imported += 1;
-                    }
-                }
-            }
-        }
-
-        tracing::info!("Imported {} users from TOML file", imported);
-        Ok(imported)
-    }
-
     /// 健康检查
     pub async fn health_check(&self) -> anyhow::Result<()> {
         sqlx::query("SELECT 1").fetch_one(&self.pool).await?;
+        Ok(())
+    }
+
+    /// 获取配置值
+    pub async fn get_config(&self, key: &str) -> anyhow::Result<Option<String>> {
+        let result = sqlx::query("SELECT value FROM config WHERE key = ?")
+            .bind(key)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(result.map(|row| row.get("value")))
+    }
+
+    /// 设置配置值
+    pub async fn set_config(&self, key: &str, value: &str) -> anyhow::Result<()> {
+        let now = chrono::Utc::now().timestamp();
+        sqlx::query(
+            r#"
+            INSERT INTO config (key, value, updated_at) 
+            VALUES (?, ?, ?)
+            ON CONFLICT(key) DO UPDATE SET 
+                value = excluded.value,
+                updated_at = excluded.updated_at
+            "#,
+        )
+        .bind(key)
+        .bind(value)
+        .bind(now)
+        .execute(&self.pool)
+        .await?;
+
         Ok(())
     }
 }
