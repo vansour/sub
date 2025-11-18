@@ -9,6 +9,7 @@ use lazy_static::lazy_static;
 use parking_lot::RwLock;
 
 mod config;
+mod db;
 mod errors;
 mod handlers;
 mod log;
@@ -21,7 +22,7 @@ mod utils;
 
 use models::UserData;
 use rate_limiter::RateLimiter;
-use services::DataService;
+use db::Database;
 
 lazy_static! {
     /// 全局 Prometheus 指标注册表
@@ -32,7 +33,9 @@ lazy_static! {
 /// 应用状态
 #[derive(Clone)]
 pub struct AppState {
-    /// map username -> UserData (urls + order)
+    /// 数据库连接
+    pub db: Database,
+    /// 内存缓存 (username -> UserData)，用于快速访问
     pub store: Arc<RwLock<HashMap<String, UserData>>>,
     pub data_file_path: String,
     pub auth_config: Arc<RwLock<config::AuthConfig>>,
@@ -53,6 +56,29 @@ async fn main() {
     // 初始化日志
     log::init_logging(&cfg.log);
     tracing::info!("starting sub service");
+
+    // 设置安全配置（通过环境变量传递给验证函数）
+    std::env::set_var(
+        "ALLOW_PRIVATE_IPS",
+        if cfg.security.allow_private_ips {
+            "true"
+        } else {
+            "false"
+        },
+    );
+    std::env::set_var(
+        "ALLOW_LOCALHOST",
+        if cfg.security.allow_localhost {
+            "true"
+        } else {
+            "false"
+        },
+    );
+    tracing::info!(
+        allow_private_ips = cfg.security.allow_private_ips,
+        allow_localhost = cfg.security.allow_localhost,
+        "Security settings configured"
+    );
 
     // 初始化 Rate Limiter
     let rate_limiter = RateLimiter::new(rate_limiter::RateLimiterConfig {
@@ -81,18 +107,60 @@ async fn main() {
         });
     }
 
+    // 初始化数据库
+    let database_path = format!("sqlite:{}", cfg.data.database_path);
+    let db = match Database::new(&database_path).await {
+        Ok(db) => {
+            tracing::info!(path = %cfg.data.database_path, "Database initialized");
+            db
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to initialize database");
+            panic!("Database initialization failed: {}", e);
+        }
+    };
+
+    // 从 TOML 文件导入现有数据（仅首次运行或迁移）
+    match db.import_from_toml(&cfg.data.data_file_path).await {
+        Ok(count) if count > 0 => {
+            tracing::info!(imported_users = count, "Migrated users from TOML to database");
+        }
+        Ok(_) => {
+            tracing::debug!("No data to import from TOML file");
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to import from TOML, continuing with database");
+        }
+    }
+
+    // 从数据库加载数据到内存缓存
+    let store = Arc::new(RwLock::new(HashMap::new()));
+    match db.get_all_users().await {
+        Ok(users) => {
+            let mut store_write = store.write();
+            for user in users {
+                store_write.insert(
+                    user.username.clone(),
+                    UserData {
+                        urls: user.urls,
+                        order: user.order_index as usize,
+                    },
+                );
+            }
+            tracing::info!(user_count = store_write.len(), "Loaded users into memory cache");
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "Failed to load users from database");
+        }
+    }
+
     let state = AppState {
-        store: Arc::new(RwLock::new(HashMap::new())),
+        db,
+        store,
         data_file_path: cfg.data.data_file_path.clone(),
         auth_config: Arc::new(RwLock::new(cfg.auth.clone())),
         rate_limiter,
     };
-
-    // 从文件加载已存在的数据
-    let data_service = DataService::new(state.store.clone(), state.data_file_path.clone());
-    if let Err(e) = data_service.load() {
-        tracing::error!("failed to load data: {}", e);
-    }
 
     let addr: SocketAddr = format!("{}:{}", cfg.server.host, cfg.server.port)
         .parse()

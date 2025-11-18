@@ -11,7 +11,7 @@ use crate::{
     models::{
         ApiResponse, CreateRequest, CreateResponse, InfoResponse, ReorderRequest, UsersResponse,
     },
-    services::{DataService, UrlService},
+    services::UrlService,
     AppState,
 };
 
@@ -58,57 +58,68 @@ pub async fn create_user(
         ));
     }
 
-    // 创建或更新用户
+    // 检查用户是否已存在
+    let user_exists = state
+        .db
+        .user_exists(&username)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Database error: {}", e)))?;
+
+    if user_exists && !payload.allow_overwrite {
+        tracing::warn!(
+            username = %username,
+            "user already exists and allow_overwrite is false"
+        );
+        return Err(AppError::Conflict(format!(
+            "User '{}' already exists",
+            username
+        )));
+    }
+
+    // 获取 order（保留现有 order 或分配新的）
+    let order = if let Some(existing) = state.db.get_user(&username).await.map_err(|e| {
+        AppError::InternalError(format!("Failed to get user: {}", e))
+    })? {
+        existing.order_index
+    } else {
+        // 新用户，获取最大 order + 1
+        let max_order = state
+            .db
+            .get_all_users()
+            .await
+            .map_err(|e| AppError::InternalError(format!("Failed to get users: {}", e)))?
+            .iter()
+            .map(|u| u.order_index)
+            .max()
+            .unwrap_or(0);
+        max_order + 1
+    };
+
+    // 保存到数据库
+    state
+        .db
+        .upsert_user(&username, &valid_urls, order)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to save user: {}", e)))?;
+
+    // 更新内存缓存
     {
         let mut map = state.store.write();
-
-        if map.contains_key(&username) && !payload.allow_overwrite {
-            tracing::warn!(
-                username = %username,
-                "user already exists and allow_overwrite is false"
-            );
-            return Err(AppError::Conflict(format!(
-                "User '{}' already exists",
-                username
-            )));
-        }
-
-        // 如果是新用户，分配新的 order；如果是覆盖，保留原 order
-        let order = if let Some(existing) = map.get(&username) {
-            let old_order = existing.order;
-            tracing::debug!(username = %username, order = old_order, "preserving existing order");
-            old_order
-        } else {
-            let new_order = map.values().map(|d| d.order).max().unwrap_or(0) + 1;
-            tracing::debug!(username = %username, order = new_order, "assigned new order");
-            new_order
-        };
-
         map.insert(
             username.clone(),
             crate::models::UserData {
                 urls: valid_urls.clone(),
-                order,
+                order: order as usize,
             },
         );
     }
 
-    // 同步持久化
-    let data_service = DataService::new(state.store.clone(), state.data_file_path.clone());
-    match data_service.persist() {
-        Ok(()) => {
-            tracing::info!(
-                username = %username,
-                accepted_count = valid_urls.len(),
-                rejected_count = rejected_urls.len(),
-                "user link created/updated and persisted successfully"
-            );
-        }
-        Err(e) => {
-            tracing::error!(username = %username, error = %e, "failed to persist user data");
-            return Err(e);
-        }
-    }
+    tracing::info!(
+        username = %username,
+        accepted_count = valid_urls.len(),
+        rejected_count = rejected_urls.len(),
+        "user created/updated successfully"
+    );
 
     let response = CreateResponse {
         username: username.clone(),
@@ -135,34 +146,84 @@ pub async fn get_user_info(
 ) -> Result<impl IntoResponse, AppError> {
     tracing::debug!(username = %username, "get_user_info request received");
 
-    let map = state.store.read();
-    if let Some(user_data) = map.get(&username) {
-        tracing::debug!(
-            username = %username,
-            url_count = user_data.urls.len(),
-            "user info retrieved successfully"
-        );
-        let response = InfoResponse {
-            username,
-            urls: user_data.urls.clone(),
-        };
-        Ok((StatusCode::OK, Json(ApiResponse::success(response))).into_response())
-    } else {
-        tracing::warn!(username = %username, "user not found");
-        Err(AppError::NotFound(format!("User '{}' not found", username)))
+    // 先从缓存读取
+    {
+        let map = state.store.read();
+        if let Some(user_data) = map.get(&username) {
+            tracing::debug!(
+                username = %username,
+                url_count = user_data.urls.len(),
+                "user info retrieved from cache"
+            );
+            let response = InfoResponse {
+                username,
+                urls: user_data.urls.clone(),
+            };
+            return Ok((StatusCode::OK, Json(ApiResponse::success(response))));
+        }
+    }
+
+    // 缓存中没有，从数据库读取
+    match state.db.get_user(&username).await {
+        Ok(Some(db_user)) => {
+            tracing::debug!(
+                username = %username,
+                url_count = db_user.urls.len(),
+                "user info retrieved from database"
+            );
+            
+            // 更新缓存
+            let mut map = state.store.write();
+            map.insert(
+                username.clone(),
+                crate::models::UserData {
+                    urls: db_user.urls.clone(),
+                    order: db_user.order_index as usize,
+                },
+            );
+            
+            let response = InfoResponse {
+                username,
+                urls: db_user.urls,
+            };
+            Ok((StatusCode::OK, Json(ApiResponse::success(response))))
+        }
+        Ok(None) => {
+            tracing::warn!(username = %username, "user not found");
+            Err(AppError::NotFound(format!("User '{}' not found", username)))
+        }
+        Err(e) => {
+            tracing::error!(username = %username, error = %e, "database error");
+            Err(AppError::InternalError(format!("Database error: {}", e)))
+        }
     }
 }
 
 /// 获取所有用户列表
-pub async fn list_users(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn list_users(
+    State(state): State<AppState>,
+) -> Result<impl IntoResponse, AppError> {
     tracing::debug!("list_users request received");
 
-    let data_service = DataService::new(state.store.clone(), state.data_file_path.clone());
-    let users = data_service.get_all_users();
+    // 从数据库获取所有用户
+    let db_users = state
+        .db
+        .get_all_users()
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to get users: {}", e)))?;
+
+    // 转换为 API 响应格式
+    let users: Vec<_> = db_users
+        .into_iter()
+        .map(|db_user| crate::models::UserInfo {
+            username: db_user.username,
+            urls: db_user.urls,
+        })
+        .collect();
 
     tracing::info!(user_count = users.len(), "user list retrieved successfully");
     let response = UsersResponse { users };
-    Json(ApiResponse::success(response))
+    Ok(Json(ApiResponse::success(response)))
 }
 
 /// 删除用户
@@ -172,27 +233,25 @@ pub async fn delete_user(
 ) -> Result<impl IntoResponse, AppError> {
     tracing::info!(username = %username, "delete_user request received");
 
-    let removed = {
-        let mut map = state.store.write();
-        map.remove(&username).is_some()
-    };
+    // 从数据库删除
+    let deleted = state
+        .db
+        .delete_user(&username)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to delete user: {}", e)))?;
 
-    if !removed {
+    if !deleted {
         tracing::warn!(username = %username, "user not found for deletion");
         return Err(AppError::NotFound(format!("User '{}' not found", username)));
     }
 
-    // 同步持久化
-    let data_service = DataService::new(state.store.clone(), state.data_file_path.clone());
-    match data_service.persist() {
-        Ok(()) => {
-            tracing::info!(username = %username, "user deleted and persisted successfully");
-        }
-        Err(e) => {
-            tracing::error!(username = %username, error = %e, "failed to persist after deletion");
-            return Err(e);
-        }
+    // 从缓存中删除
+    {
+        let mut map = state.store.write();
+        map.remove(&username);
     }
+
+    tracing::info!(username = %username, "user deleted successfully");
 
     Ok((
         StatusCode::OK,
@@ -212,30 +271,33 @@ pub async fn reorder_users(
         "reorder_users request received"
     );
 
+    // 构建 username -> new_order 的映射
+    let order_map: std::collections::HashMap<String, i64> = payload
+        .usernames
+        .iter()
+        .enumerate()
+        .map(|(idx, username)| (username.clone(), (idx + 1) as i64))
+        .collect();
+
+    // 更新数据库中的排序
+    state
+        .db
+        .update_user_orders(&order_map)
+        .await
+        .map_err(|e| AppError::InternalError(format!("Failed to update orders: {}", e)))?;
+
+    // 更新缓存中的排序
     {
         let mut map = state.store.write();
-        for (new_order, username) in payload.usernames.iter().enumerate() {
+        for (username, new_order) in order_map.iter() {
             if let Some(user_data) = map.get_mut(username) {
-                let order_value = new_order + 1;
-                user_data.order = order_value;
-                tracing::debug!(username = %username, order = order_value, "order updated");
-            } else {
-                tracing::warn!(username = %username, "user not found during reorder");
+                user_data.order = *new_order as usize;
+                tracing::debug!(username = %username, order = new_order, "order updated in cache");
             }
         }
     }
 
-    // 持久化
-    let data_service = DataService::new(state.store.clone(), state.data_file_path.clone());
-    match data_service.persist() {
-        Ok(()) => {
-            tracing::info!("user reorder persisted successfully");
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "failed to persist reorder");
-            return Err(e);
-        }
-    }
+    tracing::info!("user reorder completed successfully");
 
     Ok((
         StatusCode::OK,

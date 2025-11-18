@@ -1,7 +1,6 @@
-pub mod auth;
-pub mod data;
-pub mod url;
+mod auth;
+mod data; // Keep for potential future use
+mod url;
 
 pub use auth::AuthService;
-pub use data::DataService;
 pub use url::UrlService;

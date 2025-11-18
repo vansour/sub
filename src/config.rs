@@ -17,6 +17,41 @@ pub struct LogConfig {
 pub struct DataConfig {
     #[serde(rename = "dataFilePath")]
     pub data_file_path: String,
+    /// SQLite 数据库文件路径
+    #[serde(rename = "databasePath", default = "default_database_path")]
+    pub database_path: String,
+}
+
+fn default_database_path() -> String {
+    "/app/data/sub.db".to_string()
+}
+
+/// 安全配置
+#[derive(Debug, Deserialize, Clone)]
+pub struct SecurityConfig {
+    /// 是否允许访问私有 IP（防止 SSRF 攻击）
+    #[serde(default = "default_allow_private_ips")]
+    pub allow_private_ips: bool,
+    /// 是否允许访问 localhost
+    #[serde(default = "default_allow_localhost")]
+    pub allow_localhost: bool,
+}
+
+fn default_allow_private_ips() -> bool {
+    false
+}
+
+fn default_allow_localhost() -> bool {
+    false
+}
+
+impl Default for SecurityConfig {
+    fn default() -> Self {
+        Self {
+            allow_private_ips: false,
+            allow_localhost: false,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, Clone)]
@@ -174,6 +209,8 @@ pub struct AppConfig {
     pub auth: AuthConfig,
     #[serde(default)]
     pub rate_limit: RateLimitConfig,
+    #[serde(default)]
+    pub security: SecurityConfig,
 }
 
 impl AppConfig {
@@ -236,6 +273,7 @@ impl AppConfig {
             },
             data: DataConfig {
                 data_file_path: "/app/data/data.toml".to_string(),
+                database_path: default_database_path(),
             },
             auth: AuthConfig {
                 username: ADMIN_USERNAME.to_string(),
@@ -243,6 +281,7 @@ impl AppConfig {
                 secret: String::new(), // 将在 load() 中填充
             },
             rate_limit: RateLimitConfig::default(),
+            security: SecurityConfig::default(),
         })
     }
 
