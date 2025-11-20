@@ -10,38 +10,22 @@ use crate::{
     AppState,
     errors::{AppError, handle_db_error},
     models::{
-        ApiResponse, CreateRequest, CreateResponse, InfoResponse, ReorderRequest, UsersResponse,
+        ApiResponse, CreateRequest, CreateResponse, InfoResponse, ReorderRequest, UserInfo,
+        UsersResponse,
     },
     services::UrlService,
 };
 
-/// 从缓存或数据库获取用户数据
+/// 从数据库获取用户数据
 async fn get_user_data(
     state: &AppState,
     username: &str,
 ) -> Result<crate::models::UserData, AppError> {
-    // 先从缓存读取
-    {
-        let map = state.store.read();
-        if let Some(user_data) = map.get(username) {
-            return Ok(user_data.clone());
-        }
-    }
-
-    // 缓存中没有，从数据库读取
     match state.db.get_user(username).await {
-        Ok(Some(db_user)) => {
-            let user_data = crate::models::UserData {
-                urls: db_user.urls.clone(),
-                order: db_user.order_index as usize,
-            };
-
-            // 更新缓存
-            let mut map = state.store.write();
-            map.insert(username.to_string(), user_data.clone());
-
-            Ok(user_data)
-        }
+        Ok(Some(db_user)) => Ok(crate::models::UserData {
+            urls: db_user.urls,
+            order: db_user.order_index as usize,
+        }),
         Ok(None) => Err(AppError::NotFound(format!("User '{}' not found", username))),
         Err(e) => Err(handle_db_error("get_user", e)),
     }
@@ -134,28 +118,12 @@ pub async fn create_user(
         max_order + 1
     };
 
-    // 缓存双删策略：
-    // 1. 删除缓存（避免并发读取到旧数据）
-    {
-        let mut map = state.store.write();
-        map.remove(&username);
-    }
-
-    // 2. 保存到数据库
+    // 保存到数据库
     state
         .db
         .upsert_user(&username, &valid_urls, order)
         .await
         .map_err(|e| handle_db_error("upsert_user", e))?;
-
-    // 3. 再次删除缓存（确保不会有延迟写入的旧数据）
-    // 等待一小段时间后删除，让正在进行的读操作完成
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    {
-        let mut map = state.store.write();
-        map.remove(&username);
-    }
-    // 注意：下次读取时会从数据库加载最新数据到缓存
 
     tracing::info!(
         username = %username,
@@ -217,9 +185,9 @@ pub async fn list_users(State(state): State<AppState>) -> Result<impl IntoRespon
         .map_err(|e| handle_db_error("get_all_users", e))?;
 
     // 转换为 API 响应格式
-    let users: Vec<_> = db_users
+    let users: Vec<UserInfo> = db_users
         .into_iter()
-        .map(|db_user| crate::models::UserInfo {
+        .map(|db_user| UserInfo {
             username: db_user.username,
             urls: db_user.urls,
         })
@@ -237,12 +205,6 @@ pub async fn delete_user(
 ) -> Result<impl IntoResponse, AppError> {
     tracing::info!(username = %username, "delete_user request received");
 
-    // 缓存双删策略：先删除缓存
-    {
-        let mut map = state.store.write();
-        map.remove(&username);
-    }
-
     // 从数据库删除
     let deleted = state
         .db
@@ -253,13 +215,6 @@ pub async fn delete_user(
     if !deleted {
         tracing::warn!(username = %username, "user not found for deletion");
         return Err(AppError::NotFound(format!("User '{}' not found", username)));
-    }
-
-    // 再次删除缓存
-    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-    {
-        let mut map = state.store.write();
-        map.remove(&username);
     }
 
     tracing::info!(username = %username, "user deleted successfully");
@@ -296,17 +251,6 @@ pub async fn reorder_users(
         .update_user_orders(&order_map)
         .await
         .map_err(|e| handle_db_error("update_user_orders", e))?;
-
-    // 更新缓存中的排序
-    {
-        let mut map = state.store.write();
-        for (username, new_order) in order_map.iter() {
-            if let Some(user_data) = map.get_mut(username) {
-                user_data.order = *new_order as usize;
-                tracing::debug!(username = %username, order = new_order, "order updated in cache");
-            }
-        }
-    }
 
     tracing::info!("user reorder completed successfully");
 

@@ -1,5 +1,32 @@
 use serde::Deserialize;
 
+/// 运行环境，用于区分开发/测试/生产
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppEnv {
+    Development,
+    Test,
+    Production,
+}
+
+impl AppEnv {
+    fn current() -> Self {
+        let env = std::env::var("APP_ENV")
+            .or_else(|_| std::env::var("RUST_ENV"))
+            .unwrap_or_else(|_| "development".to_string())
+            .to_lowercase();
+
+        match env.as_str() {
+            "prod" | "production" => AppEnv::Production,
+            "test" | "testing" => AppEnv::Test,
+            _ => AppEnv::Development,
+        }
+    }
+
+    fn is_production(&self) -> bool {
+        matches!(self, AppEnv::Production)
+    }
+}
+
 #[derive(Debug, Deserialize, Clone)]
 pub struct ServerConfig {
     pub host: String,
@@ -141,11 +168,12 @@ impl Default for RateLimitConfig {
 
 /// 生成随机 JWT Secret (32 字节的 hex 编码，64 个字符)
 fn generate_jwt_secret() -> String {
-    use rand::RngCore;
+    use rand::{RngCore, rng};
     use std::fmt::Write;
 
     let mut random_bytes = [0u8; 32];
-    rand::rng().fill_bytes(&mut random_bytes);
+    let mut rng = rng();
+    rng.fill_bytes(&mut random_bytes);
 
     let mut hex_string = String::with_capacity(64);
     for byte in &random_bytes {
@@ -154,7 +182,7 @@ fn generate_jwt_secret() -> String {
     hex_string
 }
 
-/// 验证 JWT Secret 强度（至少 32 字节熵）
+/// 验证 JWT Secret 强度（至少 32 字节熵，并且字符有一定复杂度）
 fn validate_jwt_secret(secret: &str) -> Result<(), String> {
     // Secret 应该至少 32 字节（64 个十六进制字符或 32+ 个普通字符）
     if secret.len() < 32 {
@@ -162,6 +190,19 @@ fn validate_jwt_secret(secret: &str) -> Result<(), String> {
             "JWT secret too short ({} chars). Minimum 32 characters required for security.",
             secret.len()
         ));
+    }
+
+    // 要求包含多种字符类型，以提升熵
+    let has_lower = secret.chars().any(|c| c.is_ascii_lowercase());
+    let has_upper = secret.chars().any(|c| c.is_ascii_uppercase());
+    let has_digit = secret.chars().any(|c| c.is_ascii_digit());
+    let has_other = secret.chars().any(|c| !c.is_ascii_alphanumeric());
+
+    let classes = has_lower as u8 + has_upper as u8 + has_digit as u8 + has_other as u8;
+    if classes < 2 {
+        return Err(
+            "JWT secret too weak: please use a mix of letters, digits or symbols.".to_string(),
+        );
     }
 
     // 检查是否为默认/示例值（完整匹配或明显的弱密码模式）
@@ -198,9 +239,9 @@ fn validate_jwt_secret(secret: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// 内置的管理员凭证（生产环境建议使用环境变量覆盖）
+/// 内置的管理员凭证（开发/测试使用，生产环境必须通过环境变量提供）
 const ADMIN_USERNAME: &str = "admin";
-const ADMIN_PASSWORD: &str = "admin"; // 启动时会被 hash 化
+const ADMIN_PASSWORD: &str = "admin"; // 仅在非生产环境下作为默认值
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AppConfig {
@@ -217,13 +258,27 @@ pub struct AppConfig {
 impl AppConfig {
     /// 从配置文件和数据库加载配置
     pub async fn load(db: &crate::db::Database) -> anyhow::Result<Self> {
+        let env = AppEnv::current();
+
         // 从 config.toml 加载基本配置，如果不存在或格式不对则使用内置默认值
         let mut cfg = match std::fs::read_to_string("config/config.toml") {
             Ok(content) => match toml::from_str::<AppConfig>(&content) {
                 Ok(c) => c,
-                Err(_) => Self::with_defaults()?,
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "Failed to parse config/config.toml, falling back to defaults",
+                    );
+                    Self::with_defaults(env)?
+                }
             },
-            Err(_) => Self::with_defaults()?,
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to read config/config.toml, falling back to defaults",
+                );
+                Self::with_defaults(env)?
+            }
         };
 
         // 从数据库加载认证配置（优先级高于 config.toml）
@@ -359,17 +414,47 @@ impl AppConfig {
     }
 
     /// 使用内置默认凭证创建配置
-    fn with_defaults() -> anyhow::Result<Self> {
-        let password_hash = bcrypt::hash(ADMIN_PASSWORD, bcrypt::DEFAULT_COST)
+    fn with_defaults(env: AppEnv) -> anyhow::Result<Self> {
+        // 生产环境强制从环境变量读取初始管理员账号和密码
+        let (username, password) = if env.is_production() {
+            let username = std::env::var("ADMIN_USERNAME").map_err(|_| {
+                anyhow::anyhow!(
+                    "ADMIN_USERNAME must be set in production to avoid insecure default admin account",
+                )
+            })?;
+
+            let password = std::env::var("ADMIN_PASSWORD").map_err(|_| {
+                anyhow::anyhow!(
+                    "ADMIN_PASSWORD must be set in production to avoid insecure default admin account",
+                )
+            })?;
+
+            tracing::info!(
+                username = %username,
+                "Using admin credentials from environment in production",
+            );
+            (username, password)
+        } else {
+            tracing::warn!(
+                "Using built-in default admin credentials (admin/admin) in non-production environment. \
+                 DO NOT use these defaults in production.",
+            );
+            (ADMIN_USERNAME.to_string(), ADMIN_PASSWORD.to_string())
+        };
+
+        let password_hash = bcrypt::hash(&password, bcrypt::DEFAULT_COST)
             .map_err(|e| anyhow::anyhow!("Failed to hash password: {}", e))?;
 
         Ok(AppConfig {
             server: ServerConfig {
-                host: "0.0.0.0".to_string(),
-                port: 8080,
+                host: std::env::var("SERVER_HOST").unwrap_or_else(|_| "0.0.0.0".to_string()),
+                port: std::env::var("SERVER_PORT")
+                    .ok()
+                    .and_then(|v| v.parse::<u16>().ok())
+                    .unwrap_or(8080),
             },
             auth: AuthConfig {
-                username: ADMIN_USERNAME.to_string(),
+                username,
                 password_hash,
                 secret: String::new(), // 将在 load() 中填充
             },

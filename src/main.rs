@@ -1,9 +1,9 @@
 use std::{
-    collections::HashMap,
     net::SocketAddr,
     sync::{Arc, OnceLock},
 };
 
+use anyhow::Context;
 use axum::{
     Router, middleware as axum_middleware,
     routing::{delete, get, post},
@@ -22,8 +22,8 @@ mod services;
 mod utils;
 
 use db::Database;
-use models::UserData;
 use rate_limiter::RateLimiter;
+use tokio::task::JoinHandle;
 
 /// 全局 Prometheus 指标注册表
 pub static METRICS_REGISTRY: OnceLock<parking_lot::Mutex<prometheus::Registry>> = OnceLock::new();
@@ -38,8 +38,6 @@ pub fn get_metrics_registry() -> &'static parking_lot::Mutex<prometheus::Registr
 pub struct AppState {
     /// 数据库连接
     pub db: Database,
-    /// 内存缓存 (username -> UserData)，用于快速访问
-    pub store: Arc<RwLock<HashMap<String, UserData>>>,
     pub auth_config: Arc<RwLock<config::AuthConfig>>,
     pub rate_limiter: RateLimiter,
     /// 安全配置
@@ -140,71 +138,84 @@ fn _assert_app_state_send_sync() {
     assert_traits::<AppState>();
 }
 
-#[tokio::main]
-async fn main() {
-    // 先初始化基本日志（使用默认配置）
-    tracing_subscriber::fmt()
+fn init_tracing() {
+    use tracing_subscriber::{EnvFilter, fmt};
+
+    let env_filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,sqlx=warn"));
+
+    fmt()
+        .with_env_filter(env_filter)
         .with_target(false)
         .with_level(true)
         .init();
+}
 
-    // 从环境变量获取数据库路径，默认为 /app/data/sub.db
+async fn init_database() -> anyhow::Result<Database> {
     let database_path =
         std::env::var("DATABASE_PATH").unwrap_or_else(|_| "/app/data/sub.db".to_string());
 
     tracing::info!("Using database path: {}", database_path);
 
-    // 验证数据库路径
-    if let Err(e) = validate_database_path(&database_path) {
-        tracing::error!(error = %e, "Database path validation failed");
-        std::process::exit(1);
-    }
+    validate_database_path(&database_path)
+        .with_context(|| format!("Database path validation failed: {}", database_path))?;
 
-    // 初始化数据库
     let db = Database::new(&database_path)
         .await
-        .expect("failed to initialize database");
-    tracing::info!("Database initialized at {}", database_path);
+        .with_context(|| format!("failed to initialize database at {}", database_path))?;
 
-    // 从数据库和配置文件加载完整配置
-    let cfg = config::AppConfig::load(&db)
+    tracing::info!("Database initialized at {}", database_path);
+    Ok(db)
+}
+
+async fn init_config(db: &Database) -> anyhow::Result<config::AppConfig> {
+    let cfg = config::AppConfig::load(db)
         .await
-        .expect("failed to load config");
+        .context("failed to load config")?;
 
     tracing::info!("starting sub service with database backend");
-
-    // 日志记录安全配置
     tracing::info!(
         allow_private_ips = cfg.security.allow_private_ips,
         allow_localhost = cfg.security.allow_localhost,
         "Security settings configured"
     );
 
-    // 创建共享的 HTTP 客户端（用于所有 URL 抓取）
-    let http_client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(
-            cfg.http_client.request_timeout_secs,
-        ))
-        .connect_timeout(std::time::Duration::from_secs(
-            cfg.http_client.connect_timeout_secs,
-        ))
+    Ok(cfg)
+}
+
+fn build_http_client(cfg: &config::HttpClientConfig) -> anyhow::Result<reqwest::Client> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(cfg.request_timeout_secs))
+        .connect_timeout(std::time::Duration::from_secs(cfg.connect_timeout_secs))
         .user_agent(concat!("sub/", env!("CARGO_PKG_VERSION")))
         .danger_accept_invalid_certs(false)
         .tcp_keepalive(std::time::Duration::from_secs(60))
-        .pool_idle_timeout(std::time::Duration::from_secs(
-            cfg.http_client.pool_idle_timeout_secs,
-        ))
-        .pool_max_idle_per_host(cfg.http_client.pool_max_idle_per_host)
+        .pool_idle_timeout(std::time::Duration::from_secs(cfg.pool_idle_timeout_secs))
+        .pool_max_idle_per_host(cfg.pool_max_idle_per_host)
         .build()
-        .expect("failed to create HTTP client");
+        .context("failed to create HTTP client")?;
+
     tracing::info!(
-        request_timeout_secs = cfg.http_client.request_timeout_secs,
-        connect_timeout_secs = cfg.http_client.connect_timeout_secs,
-        pool_idle_timeout_secs = cfg.http_client.pool_idle_timeout_secs,
+        request_timeout_secs = cfg.request_timeout_secs,
+        connect_timeout_secs = cfg.connect_timeout_secs,
+        pool_idle_timeout_secs = cfg.pool_idle_timeout_secs,
         "Shared HTTP client initialized"
     );
 
-    // 初始化 Rate Limiter
+    Ok(client)
+}
+
+fn spawn_rate_limiter_cleanup(limiter: RateLimiter) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300)); // 每 5 分钟清理一次
+        loop {
+            interval.tick().await;
+            limiter.cleanup_expired();
+        }
+    })
+}
+
+async fn build_app_state(db: Database, cfg: config::AppConfig) -> AppState {
     let rate_limiter = RateLimiter::new(rate_limiter::RateLimiterConfig {
         login_attempts_per_minute: cfg.rate_limit.login_attempts_per_minute,
         login_lockout_duration_secs: cfg.rate_limit.login_lockout_duration_secs,
@@ -219,57 +230,28 @@ async fn main() {
         "Rate limiter initialized"
     );
 
-    // 启动定期清理任务
-    {
-        let limiter = rate_limiter.clone();
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(300)); // 每 5 分钟清理一次
-            loop {
-                interval.tick().await;
-                limiter.cleanup_expired();
-            }
-        });
-    }
+    let _cleanup_handle = spawn_rate_limiter_cleanup(rate_limiter.clone());
 
-    // 从数据库加载数据到内存缓存
-    let store = Arc::new(RwLock::new(HashMap::new()));
-    match db.get_all_users().await {
-        Ok(users) => {
-            let mut store_write = store.write();
-            for user in users {
-                store_write.insert(
-                    user.username.clone(),
-                    UserData {
-                        urls: user.urls,
-                        order: user.order_index as usize,
-                    },
-                );
-            }
-            tracing::info!(
-                user_count = store_write.len(),
-                "Loaded users into memory cache"
-            );
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "Failed to load users from database");
-        }
-    }
+    let http_client = build_http_client(&cfg.http_client).expect("failed to build http client");
 
-    let state = AppState {
+    AppState {
         db,
-        store,
         auth_config: Arc::new(RwLock::new(cfg.auth.clone())),
         rate_limiter,
         security_config: Arc::new(cfg.security.clone()),
         http_client_config: Arc::new(cfg.http_client.clone()),
         http_client,
-    };
+    }
+}
 
-    let addr: SocketAddr = format!("{}:{}", cfg.server.host, cfg.server.port)
+fn build_router(
+    state: AppState,
+    cfg: &config::ServerConfig,
+) -> anyhow::Result<(Router, SocketAddr)> {
+    let addr: SocketAddr = format!("{}:{}", cfg.host, cfg.port)
         .parse()
-        .expect("invalid server host/port in config");
+        .context("invalid server host/port in config")?;
 
-    // 需要认证的路由
     let protected_routes = Router::new()
         .route("/api/create", post(handlers::create_user))
         .route("/api/users", get(handlers::list_users))
@@ -299,12 +281,30 @@ async fn main() {
         .layer(axum_middleware::from_fn(middleware::metrics_middleware))
         .with_state(state);
 
+    Ok((app, addr))
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    init_tracing();
+
+    let db = init_database().await?;
+    let cfg = init_config(&db).await?;
+    let state = build_app_state(db, cfg.clone()).await;
+
+    let (app, addr) = build_router(state, &cfg.server)?;
+
     tracing::info!("Listening on {}", addr);
-    let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .context("failed to bind TCP listener")?;
+
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<SocketAddr>(),
     )
     .await
-    .unwrap();
+    .context("server error")?;
+
+    Ok(())
 }

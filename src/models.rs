@@ -199,10 +199,12 @@ pub struct UrlValidationResult {
     pub rejected: Vec<RejectedUrl>,
 }
 
-/// 用户数据（内存存储）
+/// 用户数据（供 handler 从 DB 映射使用）
 #[derive(Debug, Clone)]
 pub struct UserData {
     pub urls: Vec<String>,
+    /// 当前实现中未直接使用排序字段，仅预留扩展
+    #[allow(dead_code)]
     pub order: usize,
 }
 

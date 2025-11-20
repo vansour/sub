@@ -1,5 +1,6 @@
 use sqlx::Row;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use std::path::Path;
 use std::str::FromStr;
 use std::time::Duration;
 
@@ -22,8 +23,11 @@ pub struct UserRecord {
 impl Database {
     /// 初始化数据库连接
     pub async fn new(database_path: &str) -> anyhow::Result<Self> {
-        // 确保数据库目录存在
-        if let Some(parent) = std::path::Path::new(database_path).parent() {
+        // 对内存或 URI 数据库跳过目录创建；仅为文件型路径创建父目录
+        if !database_path.starts_with("sqlite:")
+            && let Some(parent) = Path::new(database_path).parent()
+            && !parent.as_os_str().is_empty()
+        {
             tokio::fs::create_dir_all(parent).await?;
         }
 
@@ -317,7 +321,7 @@ mod tests {
         let db = Database::new("sqlite::memory:").await.unwrap();
 
         // 测试创建用户
-        db.upsert_user("testuser", &vec!["https://example.com".to_string()], 1)
+        db.upsert_user("testuser", &["https://example.com".to_string()], 1)
             .await
             .unwrap();
 
