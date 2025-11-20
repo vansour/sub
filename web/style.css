@@ -2,7 +2,7 @@ body {
 	font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
 		sans-serif;
 	margin: 0;
-	padding: 20px;
+	padding: 16px;
 	line-height: 1.6;
 	background: #f9fafb;
 }
@@ -14,7 +14,8 @@ body {
 
 h1 {
 	color: #111827;
-	margin-bottom: 30px;
+	margin-bottom: 24px;
+	font-size: 1.5rem;
 }
 
 h2 {
@@ -25,10 +26,33 @@ h2 {
 
 .section {
 	background: white;
-	padding: 24px;
+	padding: 20px 24px;
 	margin-bottom: 24px;
 	border-radius: 8px;
 	box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* 顶部栏布局 */
+.top-bar {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 20px;
+	gap: 12px;
+}
+
+.top-bar-actions {
+	display: flex;
+	gap: 8px;
+	flex-shrink: 0;
+}
+
+.section-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 16px;
+	gap: 12px;
 }
 
 label {
@@ -248,6 +272,48 @@ tr:hover {
 
 .action-cell {
 	white-space: nowrap;
+}
+
+/* 移动端卡片视图（默认隐藏，在小屏下显示） */
+.user-card-list {
+	display: none;
+}
+
+.user-card {
+	background: #ffffff;
+	border-radius: 8px;
+	border: 1px solid #e5e7eb;
+	padding: 14px 16px;
+	margin-bottom: 12px;
+	box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+}
+
+.user-card-header {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-bottom: 8px;
+}
+
+.user-card-name {
+	font-weight: 600;
+	color: #111827;
+	font-size: 14px;
+	max-width: 70%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.user-card-meta {
+	font-size: 12px;
+	color: #6b7280;
+}
+
+.user-card-actions {
+	display: flex;
+	gap: 8px;
+	margin-top: 8px;
 }
 
 .btn-view,
@@ -620,4 +686,40 @@ tr.drag-over {
 
 tr[draggable="true"]:active {
 	cursor: move;
+}
+
+/* 响应式适配 */
+@media (max-width: 768px) {
+	body {
+		padding: 12px;
+	}
+
+	.container {
+		max-width: 100%;
+	}
+
+	.top-bar {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.top-bar-actions {
+		width: 100%;
+		justify-content: flex-start;
+		flex-wrap: wrap;
+	}
+
+	.section-header {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	/* 小屏使用卡片视图，隐藏表格 */
+	.user-table-wrapper {
+		display: none;
+	}
+
+	.user-card-list {
+		display: block;
+	}
 }

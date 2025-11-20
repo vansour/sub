@@ -2,6 +2,7 @@
 <html lang="zh-cn">
 	<head>
 		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
 		<title>多链接短链接合并服务</title>
 		<link rel="icon" type="image/x-icon" href="/static/favicon.ico" />
 		<link rel="stylesheet" href="/static/style.css" />
@@ -17,16 +18,16 @@
 	</head>
 	<body>
 		<div class="container">
-			<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+			<div class="top-bar">
 				<h1>多链接管理服务</h1>
-				<div style="display: flex; gap: 10px;">
+				<div class="top-bar-actions">
 					<button id="settingsBtn" class="btn-secondary">⚙️ 设置</button>
 					<button id="logoutBtn" class="btn-secondary">退出</button>
 				</div>
 			</div>
 			
 			<div class="section">
-				<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+				<div class="section-header">
 					<h2>用户列表</h2>
 					<button id="addUserBtn" class="btn-primary">+ 添加用户</button>
 				</div>

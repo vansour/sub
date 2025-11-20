@@ -397,38 +397,74 @@ function displayUserList(users) {
 	// 保存用户顺序
 	userOrder = users.map(u => u.username);
 
-	let html = '<table><thead><tr><th class="drag-col"></th><th>用户名</th><th>链接</th><th>操作</th></tr></thead><tbody id="sortable-tbody">';
+	// 桌面端表格视图
+	let tableHtml = '<div class="user-table-wrapper"><table><thead><tr><th class="drag-col"></th><th>用户名</th><th>链接</th><th>操作</th></tr></thead><tbody id="sortable-tbody">';
 	for (const user of users) {
-		const userUrl = base + "/" + user.username;
-		html += `
-			<tr draggable="true" data-username="${user.username}">
+		const safeUsername = String(user.username).replace(/[&<>"']/g, s => ({
+			'&': '&amp;',
+			'<': '&lt;',
+			'>': '&gt;',
+			'"': '&quot;',
+			"'": '&#39;'
+		}[s] || s));
+		const userUrl = base + "/" + encodeURIComponent(user.username);
+		tableHtml += `
+			<tr draggable="true" data-username="${safeUsername}">
 				<td class="drag-handle" title="拖拽调整顺序">⋮⋮</td>
-				<td><a href="${userUrl}" target="_blank" class="username-link">${user.username}</a></td>
+				<td><a href="${userUrl}" target="_blank" class="username-link">${safeUsername}</a></td>
 				<td class="url-cell">${user.urls.length} 个链接</td>
 				<td class="action-cell">
-					<button class="btn-view" data-username="${user.username}" data-urls='${JSON.stringify(user.urls)}'>查看</button>
-					<button class="btn-edit" data-username="${user.username}" data-urls='${JSON.stringify(user.urls)}'>编辑</button>
-					<button class="btn-delete" data-username="${user.username}">删除</button>
+					<button class="btn-view" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>查看</button>
+					<button class="btn-edit" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>编辑</button>
+					<button class="btn-delete" data-username="${safeUsername}">删除</button>
 				</td>
 			</tr>
 		`;
 	}
-	html += "</tbody></table>"
-	listDiv.innerHTML = html;
+	tableHtml += "</tbody></table></div>";
 
-	// 初始化拖拽功能
+	// 移动端卡片视图
+	let cardsHtml = '<div class="user-card-list">';
+	for (const user of users) {
+		const safeUsername = String(user.username).replace(/[&<>"']/g, s => ({
+			'&': '&amp;',
+			'<': '&lt;',
+			'>': '&gt;',
+			'"': '&quot;',
+			"'": '&#39;'
+		}[s] || s));
+		const userUrl = base + "/" + encodeURIComponent(user.username);
+		cardsHtml += `
+			<div class="user-card" data-username="${safeUsername}">
+				<div class="user-card-header">
+					<div class="user-card-name" title="${safeUsername}">${safeUsername}</div>
+					<div class="user-card-meta">${user.urls.length} 个链接</div>
+				</div>
+				<div class="user-card-actions">
+					<button class="btn-view" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>查看</button>
+					<button class="btn-edit" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>编辑</button>
+					<button class="btn-delete" data-username="${safeUsername}">删除</button>
+				</div>
+			</div>
+		`;
+	}
+	cardsHtml += '</div>';
+
+	listDiv.innerHTML = tableHtml + cardsHtml;
+
+	// 初始化拖拽功能（仅桌面表格）
 	initDragAndDrop();
 	
-	// 添加事件监听器
-	document.querySelectorAll(".btn-view").forEach(btn => {
+	// 绑定操作按钮事件（表格 + 卡片共用类名）
+	listDiv.querySelectorAll(".btn-view").forEach(btn => {
 		btn.addEventListener("click", function() {
 			const username = this.dataset.username;
-			const userUrl = base + "/" + username;
+			const userUrl = base + "/" + encodeURIComponent(username);
 			showQRCode(username, userUrl);
 		});
 	});
 	
-	document.querySelectorAll(".btn-edit").forEach(btn => {
+	listDiv.querySelectorAll(".btn-edit").forEach(btn => {
 		btn.addEventListener("click", function() {
 			const username = this.dataset.username;
 			const urls = JSON.parse(this.dataset.urls);
@@ -436,7 +472,7 @@ function displayUserList(users) {
 		});
 	});
 	
-	document.querySelectorAll(".btn-delete").forEach(btn => {
+	listDiv.querySelectorAll(".btn-delete").forEach(btn => {
 		btn.addEventListener("click", function() {
 			const username = this.dataset.username;
 			deleteUser(username);
