@@ -41,8 +41,8 @@
 		</div>
 
 		<!-- 弹窗：添加/编辑用户 -->
-		<div id="modal" class="modal">
-			<div class="modal-content">
+		<div id="modal" class="modal" aria-hidden="true">
+			<div class="modal-content" role="dialog" aria-modal="true" tabindex="-1">
 				<div class="modal-header">
 					<h3 id="modalTitle">添加用户</h3>
 					<button class="close-btn" onclick="closeModal()">&times;</button>
@@ -51,6 +51,7 @@
 					<label for="username">用户名</label>
 					<input
 						id="username"
+						aria-label="用户名"
 						type="text"
 						placeholder="例如: user1"
 						required
@@ -58,9 +59,14 @@
 					<label for="urls">链接列表（每行一个）</label>
 					<textarea
 						id="urls"
+						aria-label="链接列表，逐行一个链接，需包含 http 或 https 协议"
 						placeholder="https://example.com/a&#10;https://example.com/b"
 						required
 					></textarea>
+					<div class="input-hint" aria-hidden="false">
+						<span id="urlCount">0</span> 条链接 · <span id="invalidCount">0</span> 个无效
+						<small class="hint-text">可粘贴多行链接；会自动去除空行。</small>
+					</div>
 					<div class="modal-actions">
 						<button type="button" class="btn-secondary" onclick="closeModal()">取消</button>
 						<button type="submit" class="btn-primary">保存</button>
@@ -71,7 +77,7 @@
 		</div>
 
 		<!-- 通知容器 -->
-		<div id="notification" class="notification"></div>
+			<div id="notification" class="notification" role="status" aria-live="polite"></div>
 
 		<!-- 全局加载指示器 -->
 		<div id="globalLoader" class="global-loader">
@@ -80,8 +86,8 @@
 		</div>
 
 		<!-- 确认弹窗 -->
-		<div id="confirmModal" class="modal">
-			<div class="modal-content confirm-modal-content">
+		<div id="confirmModal" class="modal" aria-hidden="true">
+			<div class="modal-content confirm-modal-content" role="dialog" aria-modal="true" tabindex="-1">
 				<div class="modal-header">
 					<h3>确认操作</h3>
 				</div>
@@ -96,8 +102,8 @@
 		</div>
 
 		<!-- 二维码弹窗 -->
-		<div id="qrModal" class="modal">
-			<div class="modal-content qr-modal-content">
+		<div id="qrModal" class="modal" aria-hidden="true">
+			<div class="modal-content qr-modal-content" role="dialog" aria-modal="true" tabindex="-1">
 				<div class="modal-header">
 					<h3 id="qrTitle">用户链接</h3>
 					<button class="close-btn" onclick="closeQRModal()">&times;</button>
@@ -113,9 +119,26 @@
 			</div>
 		</div>
 
+			<!-- 链接查看弹窗（显示用户全部链接，提供复制与打开操作） -->
+			<div id="linksModal" class="modal" aria-hidden="true">
+				<div class="modal-content links-modal-content" role="dialog" aria-modal="true" tabindex="-1">
+					<div class="modal-header">
+						<h3 id="linksModalTitle">链接列表</h3>
+						<button class="close-btn" onclick="closeLinksModal()">&times;</button>
+					</div>
+					  <div class="links-body" id="linksBody" tabindex="0">
+						<!-- links populated dynamically -->
+					</div>
+					<div class="modal-actions">
+						  <button class="btn-secondary" onclick="closeLinksModal()">关闭</button>
+						<button class="btn-primary" id="copyAllLinksBtn">复制全部链接</button>
+					</div>
+				</div>
+			</div>
+
 		<!-- 设置弹窗 -->
-		<div id="settingsModal" class="modal">
-			<div class="modal-content">
+		<div id="settingsModal" class="modal" aria-hidden="true">
+			<div class="modal-content" role="dialog" aria-modal="true" tabindex="-1">
 				<div class="modal-header">
 					<h3>账号设置</h3>
 					<button class="close-btn" onclick="closeSettingsModal()">&times;</button>

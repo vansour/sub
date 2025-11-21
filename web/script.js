@@ -205,15 +205,55 @@ function showQRCode(username, url) {
 		qrContainer.onclick = () => copyLink();
 		
 		modal.style.display = 'flex';
+		modal.setAttribute('aria-hidden', 'false');
+		lastFocusedElement = document.activeElement;
+		if (linkInput) linkInput.focus();
 	} catch (error) {
 		console.error('生成二维码失败:', error);
 		showNotification('生成二维码失败', 'error');
 	}
 }
 
+// ------------------------
+// 链接工具函数: 简单 URL 验证与计数
+// ------------------------
+function isValidURL(str) {
+	try {
+		// 要求带协议 (http/https)
+		const u = new URL(str);
+		return u.protocol === 'http:' || u.protocol === 'https:';
+	} catch (e) {
+		return false;
+	}
+}
+
+function updateUrlCounts() {
+	const textarea = document.getElementById('urls');
+	if (!textarea) return;
+	const lines = textarea.value.split('\n').map(s => s.trim()).filter(s => s.length > 0);
+	const total = lines.length;
+	let invalid = 0;
+	lines.forEach(l => { if (!isValidURL(l)) invalid++; });
+	const countEl = document.getElementById('urlCount');
+	const invalidEl = document.getElementById('invalidCount');
+	if (countEl) countEl.textContent = total;
+	if (invalidEl) invalidEl.textContent = invalid;
+	// 给出视觉提示：如果存在无效行，给 textarea 添加样式
+	if (invalid > 0) {
+		textarea.classList.add('invalid-line');
+	} else {
+		textarea.classList.remove('invalid-line');
+	}
+}
+
+// 在表单打开时初始化计数
+document.getElementById('urls')?.addEventListener('input', updateUrlCounts);
+
 function closeQRModal() {
 	const modal = document.getElementById('qrModal');
 	modal.style.display = 'none';
+	modal.setAttribute('aria-hidden', 'true');
+	if (lastFocusedElement && typeof lastFocusedElement.focus === 'function') lastFocusedElement.focus();
 }
 
 function copyLink() {
@@ -281,17 +321,25 @@ function showConfirmModal(message, onConfirm) {
 	});
 	
 	modal.style.display = 'flex';
+	modal.setAttribute('aria-hidden', 'false');
+	lastFocusedElement = document.activeElement;
+	if (newOkBtn && typeof newOkBtn.focus === 'function') newOkBtn.focus();
 }
 
 function closeConfirmModal() {
 	const modal = document.getElementById('confirmModal');
-	modal.style.display = 'none';
+	if (modal) {
+		modal.style.display = 'none';
+		modal.setAttribute('aria-hidden', 'true');
+	}
 	confirmCallback = null;
+	if (lastFocusedElement && typeof lastFocusedElement.focus === 'function') lastFocusedElement.focus();
 }
 
 // 弹窗控制
 let isEditMode = false;
 let originalUsername = '';
+let lastFocusedElement = null;
 
 function openModal(isEdit = false) {
 	const modal = document.getElementById("modal");
@@ -300,12 +348,18 @@ function openModal(isEdit = false) {
 	isEditMode = isEdit;
 	title.textContent = isEdit ? "编辑用户" : "添加用户";
 	modal.style.display = "flex";
+	modal.setAttribute('aria-hidden', 'false');
+	lastFocusedElement = document.activeElement;
+	const usernameInput = document.getElementById('username');
+	if (usernameInput) usernameInput.focus();
 }
 
 function closeModal() {
 	const modal = document.getElementById("modal");
 	
 	modal.style.display = "none";
+	modal.setAttribute('aria-hidden', 'true');
+	if (lastFocusedElement && typeof lastFocusedElement.focus === 'function') lastFocusedElement.focus();
 	isEditMode = false;
 	originalUsername = '';
 	document.getElementById("form").reset();
@@ -398,6 +452,23 @@ function displayUserList(users) {
 	userOrder = users.map(u => u.username);
 
 	// 桌面端表格视图
+	function renderLinkPreview(urls, max = 3) {
+		if (!Array.isArray(urls)) return '';
+		const total = urls.length;
+		const shown = urls.slice(0, max);
+		let html = '<div class="link-preview">';
+		for (const u of shown) {
+			const s = String(u);
+			const safeText = s.length > 60 ? s.slice(0, 56) + '...' : s;
+			html += `<div class="link-row"><a class="link-item" href="${s}" target="_blank" rel="noopener noreferrer">${safeText}</a><div class="link-actions"><button class="small-btn copy-btn" data-url="${encodeURI(s)}">复制</button></div></div>`;
+		}
+		if (total > max) {
+			html += `<div class="link-row"><span class="url-cell">还有 ${total - max} 个链接</span><div class="link-actions"><button class="small-btn btn-links" data-urls='${JSON.stringify(urls)}'>查看全部</button></div></div>`;
+		}
+		html += '</div>';
+		return html;
+	}
+
 	let tableHtml = '<div class="user-table-wrapper"><table><thead><tr><th class="drag-col"></th><th>用户名</th><th>链接</th><th>操作</th></tr></thead><tbody id="sortable-tbody">';
 	for (const user of users) {
 		const safeUsername = String(user.username).replace(/[&<>"']/g, s => ({
@@ -413,9 +484,10 @@ function displayUserList(users) {
 			<tr draggable="true" data-username="${safeUsername}">
 				<td class="drag-handle" title="拖拽调整顺序">⋮⋮</td>
 				<td><a href="${userUrl}" target="_blank" class="username-link">${safeUsername}</a></td>
-				<td class="url-cell">${user.urls.length} 个链接</td>
+				<td class="url-cell">${renderLinkPreview(user.urls)}</td>
 				<td class="action-cell">
-					<button class="btn-view" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>查看</button>
+					<button class="btn-view" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>二维码</button>
+					<button class="btn-links small-btn" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>链接</button>
 					<button class="btn-clash" data-username="${safeUsername}" data-clash-url="${clashUrl}">Clash</button>
 					<button class="btn-edit" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>编辑</button>
 					<button class="btn-delete" data-username="${safeUsername}">删除</button>
@@ -444,7 +516,8 @@ function displayUserList(users) {
 					<div class="user-card-meta">${user.urls.length} 个链接</div>
 				</div>
 				<div class="user-card-actions">
-					<button class="btn-view" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>查看</button>
+					    <button class="btn-view" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>二维码</button>
+					    <button class="btn-links small-btn" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>查看链接</button>
 					<button class="btn-clash" data-username="${safeUsername}" data-clash-url="${clashUrl}">Clash</button>
 					<button class="btn-edit" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>编辑</button>
 					<button class="btn-delete" data-username="${safeUsername}">删除</button>
@@ -504,7 +577,153 @@ function displayUserList(users) {
 			}
 		});
 	});
+
+	// 绑定复制小按钮与查看链接按钮
+	listDiv.querySelectorAll('.copy-btn').forEach(btn => {
+		btn.addEventListener('click', function() {
+			const url = decodeURI(this.dataset.url || '');
+			if (!url) return;
+			if (navigator.clipboard && window.isSecureContext) {
+				navigator.clipboard.writeText(url).then(() => {
+					showNotification('链接已复制', 'success');
+				}).catch(err => {
+					fallbackCopyTextToClipboard(url);
+				});
+			} else {
+				fallbackCopyTextToClipboard(url);
+			}
+		});
+	});
+
+	listDiv.querySelectorAll('.btn-links').forEach(btn => {
+		btn.addEventListener('click', function() {
+			const username = this.dataset.username;
+			let urls = [];
+			try {
+				urls = JSON.parse(this.dataset.urls || '[]');
+			} catch (e) {
+				console.warn('解析 urls 失败', e);
+			}
+			openLinksModal(username, urls);
+		});
+	});
 }
+
+// 复制字符串到剪贴板（降级）
+function fallbackCopyTextToClipboard(text) {
+	try {
+		const ta = document.createElement('textarea');
+		ta.value = text;
+		ta.style.position = 'fixed';
+		ta.style.left = '-9999px';
+		document.body.appendChild(ta);
+		ta.select();
+		document.execCommand('copy');
+		document.body.removeChild(ta);
+		showNotification('链接已复制', 'success');
+	} catch (err) {
+		console.error('复制失败', err);
+		showNotification('复制失败，请手动复制', 'error');
+	}
+}
+
+// -------------------------
+// 链接查看弹窗逻辑
+// -------------------------
+function openLinksModal(username, urls) {
+	const modal = document.getElementById('linksModal');
+	const title = document.getElementById('linksModalTitle');
+	const body = document.getElementById('linksBody');
+	title.textContent = username ? `用户 ${username} 的链接` : '链接列表';
+	body.innerHTML = '';
+
+	if (!Array.isArray(urls) || urls.length === 0) {
+		body.innerHTML = '<p class="empty-message">该用户没有链接</p>';
+	} else {
+		const list = document.createElement('div');
+		list.className = 'links-list';
+		for (const u of urls) {
+			const item = document.createElement('div');
+			item.className = 'links-item';
+
+			const linkText = document.createElement('div');
+			linkText.className = 'link-text';
+			linkText.title = u;
+			linkText.textContent = u;
+
+			const actions = document.createElement('div');
+			actions.className = 'link-actions';
+
+			const openBtn = document.createElement('button');
+			openBtn.className = 'small-btn';
+			openBtn.textContent = '打开';
+			openBtn.addEventListener('click', () => window.open(u, '_blank', 'noopener'));
+
+			const copyBtn = document.createElement('button');
+			copyBtn.className = 'small-btn';
+			copyBtn.textContent = '复制';
+			copyBtn.addEventListener('click', () => {
+				if (navigator.clipboard && window.isSecureContext) {
+					navigator.clipboard.writeText(u).then(() => showNotification('链接已复制', 'success')).catch(() => fallbackCopyTextToClipboard(u));
+				} else {
+					fallbackCopyTextToClipboard(u);
+				}
+			});
+
+			actions.appendChild(openBtn);
+			actions.appendChild(copyBtn);
+
+			item.appendChild(linkText);
+			item.appendChild(actions);
+			list.appendChild(item);
+		}
+		body.appendChild(list);
+	}
+
+	// 绑定复制全部按钮
+	const copyAllBtn = document.getElementById('copyAllLinksBtn');
+	if (copyAllBtn) {
+		copyAllBtn.onclick = () => {
+			const textToCopy = (Array.isArray(urls) ? urls : []).join('\n');
+			if (!textToCopy) return showNotification('没有可复制的链接', 'warning');
+			if (navigator.clipboard && window.isSecureContext) {
+				navigator.clipboard.writeText(textToCopy).then(() => showNotification('全部链接已复制', 'success')).catch(() => fallbackCopyTextToClipboard(textToCopy));
+			} else {
+				fallbackCopyTextToClipboard(textToCopy);
+			}
+		};
+	}
+
+	modal.style.display = 'flex';
+}
+
+function closeLinksModal() {
+	const modal = document.getElementById('linksModal');
+	if (modal) {
+		modal.style.display = 'none';
+		modal.setAttribute('aria-hidden', 'true');
+	}
+	if (lastFocusedElement && typeof lastFocusedElement.focus === 'function') lastFocusedElement.focus();
+}
+
+// 通用键盘处理（Esc 关闭当前弹窗）
+document.addEventListener('keydown', (e) => {
+	if (e.key === 'Escape') {
+		const modalIds = ['linksModal', 'qrModal', 'confirmModal', 'settingsModal', 'modal'];
+		for (const id of modalIds) {
+			const m = document.getElementById(id);
+			if (m && m.style.display === 'flex') {
+				if (id === 'linksModal') { closeLinksModal(); }
+				else if (id === 'qrModal') { closeQRModal(); }
+				else if (id === 'confirmModal') { closeConfirmModal(); }
+				else if (id === 'settingsModal') { closeSettingsModal(); }
+				else if (id === 'modal') { closeModal(); }
+				e.preventDefault();
+				break;
+			}
+		}
+	}
+});
 
 // 拖拽功能
 let draggedElement = null;
@@ -687,6 +906,13 @@ document.getElementById("form").addEventListener("submit", async (e) => {
 		return;
 	}
 
+	// 检查是否存在格式不合法的链接，阻止提交
+	const invalidLines = lines.filter(l => !isValidURL(l));
+	if (invalidLines.length > 0) {
+		showNotification(`发现 ${invalidLines.length} 条无效链接，请检查并纠正（需包含 http:// 或 https://）`, 'error');
+		return;
+	}
+
 	try {
 		// 如果是编辑模式且用户名改变了，先删除旧用户
 		if (isEditMode && originalUsername && originalUsername !== username) {
@@ -762,7 +988,14 @@ document.getElementById("form").addEventListener("submit", async (e) => {
 
 // 设置按钮
 document.getElementById("settingsBtn").addEventListener("click", () => {
-	document.getElementById("settingsModal").style.display = "flex";
+	const modal = document.getElementById("settingsModal");
+	if (modal) {
+		modal.style.display = "flex";
+		modal.setAttribute('aria-hidden', 'false');
+		lastFocusedElement = document.activeElement;
+		const input = document.getElementById('oldPassword');
+		if (input) input.focus();
+	}
 });
 
 // 退出按钮
@@ -772,8 +1005,13 @@ document.getElementById("logoutBtn").addEventListener("click", () => {
 
 // 关闭设置弹窗
 function closeSettingsModal() {
-	document.getElementById("settingsModal").style.display = "none";
+	const modal = document.getElementById("settingsModal");
+	if (modal) {
+		modal.style.display = "none";
+		modal.setAttribute('aria-hidden', 'true');
+	}
 	document.getElementById("settingsForm").reset();
+	if (lastFocusedElement && typeof lastFocusedElement.focus === 'function') lastFocusedElement.focus();
 }
 
 // 设置表单提交
