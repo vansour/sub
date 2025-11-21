@@ -173,7 +173,7 @@
 					<button class="close-btn" onclick="closeClashModal()">&times;</button>
 				</div>
 				<div class="clash-content">
-					<p class="clash-hint">此为模板配置，实际使用时会将 <code>{username}</code> 替换为具体用户名。</p>
+					<p class="clash-hint">此为模板配置，实际使用时会将 <code>{username}</code> 替换为具体用户名，且 <code>{website}</code> 会替换为当前站点的协议+主机（例如 <code>https://example.com</code>）。</p>
 					<textarea id="clashTemplatePreview" class="clash-textarea" readonly></textarea>
 					<div class="modal-actions">
 						<button type="button" class="btn-secondary" onclick="copyClashTemplate()">复制配置</button>

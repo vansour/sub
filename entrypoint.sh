@@ -7,6 +7,7 @@ set -e
 CONFIG_DIR="/app/config"
 DATA_DIR="/app/data"
 DEFAULTS_CONFIG_DIR="/app/.defaults/config"
+DEFAULTS_DATA_DIR="/app/.defaults/data"
 CONFIG_FILE="$CONFIG_DIR/config.toml"
 DEFAULT_CONFIG_FILE="$DEFAULTS_CONFIG_DIR/config.toml"
 
@@ -59,6 +60,27 @@ if [ ! -f "$CONFIG_FILE" ]; then
     fi
 else
     log_info "Using existing config file: $CONFIG_FILE"
+fi
+
+# ============================================
+# 2b. 初始化 data 目录（当宿主卷挂载为空时，从 defaults 中填充）
+# ============================================
+if [ ! -d "$DATA_DIR/clash" ] || [ ! -f "$DATA_DIR/clash/default.yaml" ]; then
+    if [ -d "$DEFAULTS_DATA_DIR" ]; then
+        log_info "Data directory $DATA_DIR missing clash template — copying defaults from $DEFAULTS_DATA_DIR"
+        # Ensure target exists
+        mkdir -p "$DATA_DIR"
+        cp -a "$DEFAULTS_DATA_DIR/." "$DATA_DIR/" 2>/dev/null || {
+            log_warn "Failed to copy default data into $DATA_DIR (permission?)"
+        }
+        # Make readable
+        chmod -R a+r "$DATA_DIR" 2>/dev/null || true
+        log_info "Default data copied to $DATA_DIR"
+    else
+        log_warn "Default data dir $DEFAULTS_DATA_DIR not found in image — no default clash template available"
+    fi
+else
+    log_info "Using existing data directory: $DATA_DIR"
 fi
 
 # ============================================

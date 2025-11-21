@@ -264,11 +264,9 @@ impl AppConfig {
         let mut cfg = match std::fs::read_to_string("config/config.toml") {
             Ok(content) => match toml::from_str::<AppConfig>(&content) {
                 Ok(c) => c,
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "Failed to parse config/config.toml, falling back to defaults",
-                    );
+                    Err(e) => {
+                        // Parsing failed — keep this quiet under normal runs (debug level)
+                        tracing::debug!(error = %e, "Failed to parse config/config.toml, falling back to defaults");
                     Self::with_defaults(env)?
                 }
             },
@@ -435,10 +433,8 @@ impl AppConfig {
             );
             (username, password)
         } else {
-            tracing::warn!(
-                "Using built-in default admin credentials (admin/admin) in non-production environment. \
-                 DO NOT use these defaults in production.",
-            );
+                // Avoid noisy warnings about defaults in non-production by using debug level
+                tracing::debug!("Using built-in default admin credentials (admin/admin) in non-production environment");
             (ADMIN_USERNAME.to_string(), ADMIN_PASSWORD.to_string())
         };
 
