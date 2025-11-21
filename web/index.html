@@ -29,7 +29,10 @@
 			<div class="section">
 				<div class="section-header">
 					<h2>用户列表</h2>
-					<button id="addUserBtn" class="btn-primary">+ 添加用户</button>
+					<div class="section-header-actions">
+						<button id="addUserBtn" class="btn-primary">+ 添加用户</button>
+						<button id="clashGuideBtn" class="btn-secondary">Clash 配置</button>
+					</div>
 				</div>
 				<div id="userList" class="user-list">
 					<p class="loading">加载中...</p>
@@ -159,6 +162,24 @@
 						<button type="submit" class="btn-primary">保存</button>
 					</div>
 				</form>
+			</div>
+		</div>
+
+		<!-- Clash 默认配置弹窗 -->
+		<div id="clashModal" class="modal">
+			<div class="modal-content clash-modal-content">
+				<div class="modal-header">
+					<h3>Clash 默认配置预览</h3>
+					<button class="close-btn" onclick="closeClashModal()">&times;</button>
+				</div>
+				<div class="clash-content">
+					<p class="clash-hint">此为模板配置，实际使用时会将 <code>{username}</code> 替换为具体用户名。</p>
+					<textarea id="clashTemplatePreview" class="clash-textarea" readonly></textarea>
+					<div class="modal-actions">
+						<button type="button" class="btn-secondary" onclick="copyClashTemplate()">复制配置</button>
+						<button type="button" class="btn-primary" onclick="closeClashModal()">关闭</button>
+					</div>
+				</div>
 			</div>
 		</div>
 

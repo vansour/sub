@@ -17,6 +17,13 @@ impl UrlService {
             return Err(AppError::ValidationError(msg));
         }
 
+        // 额外保留关键字：clash
+        if trimmed.eq_ignore_ascii_case("clash") {
+            let msg = "用户名 'clash' 为保留关键字".to_string();
+            tracing::warn!(username = %trimmed, reason = %msg, "Username validation failed (reserved)");
+            return Err(AppError::ValidationError(msg));
+        }
+
         Ok(trimmed)
     }
 

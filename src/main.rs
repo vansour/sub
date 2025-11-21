@@ -269,6 +269,8 @@ fn build_router(
         .route("/health", get(handlers::health_detailed))
         .route("/metrics", get(handlers::metrics))
         .route("/favicon.ico", get(handlers::favicon))
+        .route("/clash/{username}", get(handlers::clash_config))
+        .route("/clash/template", get(handlers::clash_template))
         .route("/api/login", post(handlers::login))
         .route("/api/info/{username}", get(handlers::get_user_info))
         .route("/{username}", get(handlers::redirect_short))

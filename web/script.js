@@ -408,6 +408,7 @@ function displayUserList(users) {
 			"'": '&#39;'
 		}[s] || s));
 		const userUrl = base + "/" + encodeURIComponent(user.username);
+		const clashUrl = base + "/clash/" + encodeURIComponent(user.username);
 		tableHtml += `
 			<tr draggable="true" data-username="${safeUsername}">
 				<td class="drag-handle" title="拖拽调整顺序">⋮⋮</td>
@@ -415,6 +416,7 @@ function displayUserList(users) {
 				<td class="url-cell">${user.urls.length} 个链接</td>
 				<td class="action-cell">
 					<button class="btn-view" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>查看</button>
+					<button class="btn-clash" data-username="${safeUsername}" data-clash-url="${clashUrl}">Clash</button>
 					<button class="btn-edit" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>编辑</button>
 					<button class="btn-delete" data-username="${safeUsername}">删除</button>
 				</td>
@@ -434,6 +436,7 @@ function displayUserList(users) {
 			"'": '&#39;'
 		}[s] || s));
 		const userUrl = base + "/" + encodeURIComponent(user.username);
+		const clashUrl = base + "/clash/" + encodeURIComponent(user.username);
 		cardsHtml += `
 			<div class="user-card" data-username="${safeUsername}">
 				<div class="user-card-header">
@@ -442,6 +445,7 @@ function displayUserList(users) {
 				</div>
 				<div class="user-card-actions">
 					<button class="btn-view" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>查看</button>
+					<button class="btn-clash" data-username="${safeUsername}" data-clash-url="${clashUrl}">Clash</button>
 					<button class="btn-edit" data-username="${safeUsername}" data-urls='${JSON.stringify(user.urls)}'>编辑</button>
 					<button class="btn-delete" data-username="${safeUsername}">删除</button>
 				</div>
@@ -476,6 +480,28 @@ function displayUserList(users) {
 		btn.addEventListener("click", function() {
 			const username = this.dataset.username;
 			deleteUser(username);
+		});
+	});
+
+	// Clash 按钮：复制当前用户 Clash 配置链接
+	listDiv.querySelectorAll(".btn-clash").forEach(btn => {
+		btn.addEventListener("click", function() {
+			const username = this.dataset.username;
+			const clashUrl = this.dataset.clashUrl;
+			// 直接复制 clashUrl 到剪贴板
+			if (navigator.clipboard && window.isSecureContext) {
+				navigator.clipboard.writeText(clashUrl)
+					.then(() => {
+						showNotification(`Clash 链接已复制: ${username}`, 'success');
+					})
+					.catch(err => {
+						console.error('复制 Clash 链接失败:', err);
+						showNotification('复制 Clash 链接失败，请手动复制', 'error');
+					});
+			} else {
+				// 非 HTTPS 或不支持 Clipboard API，使用提示
+				showNotification(`Clash 链接: ${clashUrl}`, 'info');
+			}
 		});
 	});
 }
@@ -795,3 +821,56 @@ document.getElementById("settingsForm").addEventListener("submit", async (e) => 
 		showNotification(errorMsg, 'error');
 	}
 });
+
+// Clash 配置按钮：展示默认模板
+document.getElementById("clashGuideBtn").addEventListener("click", async () => {
+	const modal = document.getElementById("clashModal");
+	const textarea = document.getElementById("clashTemplatePreview");
+	textarea.value = '加载中...';
+	modal.style.display = "flex";
+
+	try {
+		// 使用专门的模板接口获取原始模板，不做替换
+		const resp = await fetch('/clash/template', { method: 'GET' });
+		if (!resp.ok) {
+			textarea.value = `加载失败: ${resp.status}`;
+			showNotification('加载 Clash 模板失败', 'error');
+			return;
+		}
+		const text = await resp.text();
+		textarea.value = text;
+	} catch (err) {
+		console.error('加载 Clash 模板失败:', err);
+		textarea.value = '加载失败，请稍后重试';
+		showNotification('加载 Clash 模板失败', 'error');
+	}
+});
+
+function closeClashModal() {
+	const modal = document.getElementById("clashModal");
+	modal.style.display = "none";
+}
+
+function copyClashTemplate() {
+	const textarea = document.getElementById("clashTemplatePreview");
+	const textToCopy = textarea.value;
+	if (!textToCopy) {
+		showNotification('当前没有可复制的配置', 'warning');
+		return;
+	}
+	if (navigator.clipboard && window.isSecureContext) {
+		navigator.clipboard.writeText(textToCopy)
+			.then(() => {
+				showNotification('Clash 配置已复制', 'success');
+			})
+			.catch(err => {
+				console.error('复制 Clash 配置失败:', err);
+				showNotification('复制失败，请手动复制', 'error');
+			});
+	} else {
+		// 兼容模式：选中文本方便用户手动复制
+		textarea.select();
+		textarea.setSelectionRange(0, 99999);
+		showNotification('已选中配置，请手动复制', 'info');
+	}
+}
