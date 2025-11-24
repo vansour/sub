@@ -1,0 +1,67 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>Sub — Multi-user Link Merger</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Sub — 多用户多链接合并器</h1>
+
+      <section id="controls">
+        <button id="add-user" class="accent-btn">添加用户</button>
+      </section>
+
+      <section id="users">
+        <h2>用户列表</h2>
+        <div class="table-wrap">
+          <table id="user-table" class="user-table">
+            <thead>
+              <tr>
+                <th>用户名</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody id="user-list"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- modals for same-page windows -->
+      <div id="modal-overlay" class="hidden"></div>
+
+      <!-- merged view removed — we do not show merged content here anymore -->
+
+      <!-- combined add/edit modal: when adding, username editable; when editing, username locked -->
+      <div id="modal-form" class="modal hidden">
+        <div class="modal-body">
+          <h3 id="modal-form-title">编辑 / 添加 用户</h3>
+          <label>用户名</label>
+          <input id="modal-form-username" />
+
+          <label style="margin-top:8px">链接（每行一个）</label>
+          <textarea id="modal-form-links" rows="10" placeholder="https://example.com"></textarea>
+
+          <div class="modal-actions">
+            <button id="modal-form-save" class="accent-btn">保存</button>
+            <button id="modal-form-copy" class="btn-small">复制链接</button>
+            <button id="modal-form-cancel" class="btn-small">取消</button>
+          </div>
+          <div id="modal-form-status" class="muted"></div>
+        </div>
+      </div>
+
+      <div id="modal-delete" class="modal hidden">
+        <div class="modal-body">
+          <h3 id="modal-delete-title">删除用户</h3>
+          <div id="modal-delete-message" class="muted"></div>
+          <div class="modal-actions"><button id="modal-delete-confirm" class="accent-btn">确认删除</button><button id="modal-delete-cancel" class="btn-small">取消</button></div>
+          <div id="modal-delete-status" class="muted"></div>
+        </div>
+      </div>
+    </main>
+
+    <script src="/static/script.js"></script>
+  </body>
+</html>

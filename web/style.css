@@ -1,0 +1,81 @@
+:root{--bg:#0f1724;--card:#0b1220;--accent:#6ee7b7;--muted:#98a0b3}
+html,body{height:100%;}
+#body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;margin:0}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial; background:linear-gradient(180deg,#e6f6ff, #cfefff); color:#042022; margin:0;}
+
+/* Make sizing predictable so inputs/textarea don't overflow their container */
+*, *::before, *::after { box-sizing: border-box; }
+main{max-width:980px;margin:30px auto;padding:28px;background:linear-gradient(180deg, rgba(255,255,255,0.92), rgba(255,255,255,0.85));border-radius:12px;box-shadow:0 10px 30px rgba(0,40,80,0.08)}
+h1{margin:0 0 14px 0;color:#024f6f}
+#controls{display:flex;gap:8px;align-items:center;margin-bottom:18px}
+.accent-btn{background:linear-gradient(180deg,#66d6ff,#3fb0e6);color:#002233;border:1px solid rgba(2,70,100,0.18);padding:8px 12px;border-radius:8px;cursor:pointer;box-shadow:0 3px 0 rgba(2,70,100,0.06);}
+.accent-btn:hover{filter:brightness(.96);transform:translateY(-1px)}
+.list{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:14px}
+.user-card{padding:12px;border-radius:10px;background:linear-gradient(180deg, rgba(255,255,255,0.6), rgba(255,255,255,0.4));border:1px solid rgba(2,40,60,0.06)}
+.user-actions{display:flex;gap:8px;margin-top:10px}
+.btn-small{background:transparent;color:#024f6f;border:1px solid rgba(2,70,100,0.12);padding:6px;border-radius:8px}
+.btn-small:hover{background:rgba(0,80,120,0.03);}
+.btn-small:active{transform:translateY(1px)}
+.hidden{display:none}
+/* removed top inline username input; in-page modal handles add/edit */
+input, textarea{width:100%;max-width:100%;display:block;border-radius:10px;padding:10px;border:1px solid rgba(2,70,100,0.12);background:linear-gradient(180deg,#ffffff,#f3fcff);color:#013242;box-shadow:inset 0 1px 0 rgba(255,255,255,0.6);}
+textarea{min-height:120px}
+input:disabled{background:transparent;color:rgba(1,40,50,0.6);}
+.editor-controls{margin-top:8px;display:flex;gap:8px}
+.muted{color:var(--muted);font-size:13px}
+
+.notice{padding:10px;border-radius:8px;background:rgba(255,255,255,0.02);border:1px solid rgba(255,255,255,0.03);color:var(--muted);}
+
+/* table style */
+.table-wrap{overflow:auto;margin-top:10px}
+.user-table{width:100%;border-collapse:collapse;background:transparent}
+.user-table th, .user-table td{padding:10px 12px;border-bottom:1px solid rgba(0,40,60,0.07);text-align:left}
+.user-table th{background:linear-gradient(180deg,#dff8ff,#bfefff);color:#013244;border-top-left-radius:8px;border-top-right-radius:8px}
+.user-table tr:hover td{background:linear-gradient(180deg, rgba(0,60,80,0.02), rgba(0,60,80,0.01));}
+
+.small-link{background:transparent;border:none;color:#006a9a;cursor:pointer;text-decoration:underline;padding:0}
+
+.muted{color:rgba(2,30,40,0.6);font-size:13px}
+
+/* modal */
+.hidden{display:none}
+.modal{position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);z-index:1100;width:86%;max-width:900px;background:#ffffff;border-radius:12px;box-shadow:0 40px 100px rgba(0,50,80,0.18);color:#012;border:1px solid rgba(2,70,100,0.12);}
+.modal .modal-body{padding:20px;border-radius:10px}
+.modal .modal-body{background:linear-gradient(180deg,#f7feff,#eefcff);border-radius:8px;padding:18px;border:1px solid rgba(2,70,100,0.06)}
+.modal .modal-body h3{margin:0 0 8px 0;color:#01475f}
+.modal .modal-actions{display:flex;gap:8px;margin-top:12px;justify-content:flex-end}
+.mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, "Roboto Mono", monospace;background:#f5faff;padding:10px;border-radius:6px;border:1px solid rgba(2,80,120,0.12)}
+#modal-overlay{position:fixed;left:0;top:0;width:100%;height:100%;background:rgba(2,24,40,0.38);z-index:1000}
+
+/* modal header/footer visual separators */
+.modal .modal-body h3{padding-bottom:6px;border-bottom:1px solid rgba(2,70,100,0.06);margin-bottom:12px}
+
+/* buttons with distinct border style */
+button{transition:all .12s ease;border-radius:8px}
+button:focus{outline:2px solid rgba(3,100,150,0.12);outline-offset:2px}
+
+/* improved table action buttons */
+.user-actions .btn-small{padding:6px 8px;border-radius:6px}
+
+/* make edit area visually boxed */
+#modal-form-links{min-height:220px;border:1px solid rgba(2,70,100,0.12);box-shadow:inset 0 2px 8px rgba(1,30,40,0.03);max-width:100%;overflow:auto}
+
+/* Keep modal content responsive: allow wrapping and avoid overflow */
+.modal .modal-body{word-break:break-word;overflow-wrap:break-word}
+
+/* Mobile-first responsive tweaks */
+@media (max-width: 640px) {
+	main{margin:18px;padding:16px}
+	.user-table thead{display:none}
+	.user-table, .user-table tbody, .user-table tr, .user-table td{display:block;width:100%}
+	.user-table tr{margin-bottom:12px;border-radius:8px;background:linear-gradient(180deg,#f9feff,#eefcff);padding:8px;border:1px solid rgba(2,70,100,0.06)}
+	.user-table td{padding:8px 6px;border-bottom:none}
+	.user-table td .user-actions{display:flex;gap:6px;flex-wrap:wrap}
+	.user-actions .btn-small, .accent-btn{width:100%;padding:10px;border-radius:8px}
+	.modal{width:92%;left:50%;transform:translate(-50%,-50%);}
+	.modal .modal-body{padding:12px}
+	.mono{font-size:13px}
+	#modal-form-links{min-height:180px}
+}
+
+
