@@ -1,0 +1,79 @@
+# Rust build artifacts
+/target/
+**/*.rs.bk
+*.pdb
+
+# Cargo.lock - Keep for binary/application projects (recommended for reproducible builds)
+# For library projects, uncomment the line below:
+# Cargo.lock
+
+# Debug and profiling
+*.profraw
+*.gcda
+*.gcno
+flamegraph.svg
+perf.data
+perf.data.old
+
+# IDE files
+## JetBrains IDEs (IntelliJ, RustRover, CLion, etc.)
+.idea/
+*.iml
+*.ipr
+*.iws
+.idea_modules/
+
+## Visual Studio Code
+.vscode/
+*.code-workspace
+
+## Vim/Neovim
+*.swp
+*.swo
+*~
+
+## Emacs
+*~
+\#*\#
+.\#*
+
+## Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+## General backup files
+*.bak
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Log files
+*.log
+/logs/
+/log/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Docker volumes and data
+/data/
+/volumes/
+
+# Temporary files
+*.tmp
+*.temp
+/tmp/
+
+# Coverage reports
+coverage/
+*.profdata
+tarpaulin-report.html
+
+# Backup files
+*.backup
+*.bak
+*~

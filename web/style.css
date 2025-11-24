@@ -33,6 +33,10 @@ input:disabled{background:transparent;color:rgba(1,40,50,0.6);}
 .user-table th{background:linear-gradient(180deg,#dff8ff,#bfefff);color:#013244;border-top-left-radius:8px;border-top-right-radius:8px}
 .user-table tr:hover td{background:linear-gradient(180deg, rgba(0,60,80,0.02), rgba(0,60,80,0.01));}
 
+/* drag & drop visuals */
+.user-table tr.dragging{opacity:0.5}
+.user-table tr.drop-target td{border-top:2px dashed rgba(2,70,100,0.3)}
+
 .small-link{background:transparent;border:none;color:#006a9a;cursor:pointer;text-decoration:underline;padding:0}
 
 .muted{color:rgba(2,30,40,0.6);font-size:13px}

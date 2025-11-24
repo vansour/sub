@@ -17,6 +17,32 @@ async function api(path, opts={}){
   try { return JSON.parse(text); } catch(e){ return text; }
 }
 
+function getDragAfterElement(container, y) {
+  const draggableElements = [...container.querySelectorAll('tr:not(.dragging)')];
+  let closest = { offset: Number.NEGATIVE_INFINITY, element: null };
+  for (const child of draggableElements) {
+    const box = child.getBoundingClientRect();
+    const offset = y - box.top - box.height / 2;
+    if (offset < 0 && offset > closest.offset) {
+      closest = { offset, element: child };
+    }
+  }
+  return closest.element;
+}
+
+async function saveOrder() {
+  const rows = Array.from(document.querySelectorAll('#user-list tr'));
+  const order = rows.map(r => r.dataset.username).filter(Boolean);
+  if (!order.length) return;
+  try {
+    const res = await api('/api/users/order', {method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify({order})});
+    // api() returns parsed JSON or text — if it's an array we can ignore, else do nothing
+    console.log('saved order', res);
+  } catch (e) {
+    console.warn('failed to save order', e);
+  }
+}
+
 async function renderUsers(){
   const list = await api('/api/users');
   const tbody = $('#user-list');
@@ -28,6 +54,8 @@ async function renderUsers(){
 
   list.forEach(u => {
     const tr = document.createElement('tr');
+    tr.setAttribute('draggable', 'true');
+    tr.dataset.username = u;
     tr.innerHTML = `
       <td><strong>${u}</strong></td>
       <td class="user-actions">
@@ -39,8 +67,33 @@ async function renderUsers(){
     tr.querySelector('.edit').addEventListener('click', () => openEditModal(u));
     tr.querySelector('.del').addEventListener('click', () => openDeleteModal(u));
 
+    // drag handlers
+    tr.addEventListener('dragstart', (ev) => {
+      tr.classList.add('dragging');
+      ev.dataTransfer.effectAllowed = 'move';
+      ev.dataTransfer.setData('text/plain', u);
+    });
+    tr.addEventListener('dragend', async () => {
+      tr.classList.remove('dragging');
+      // after a drag finishes, persist the new order
+      await saveOrder();
+    });
+
     tbody.appendChild(tr);
   });
+
+  // allow dropping to reorder (attach once)
+  if (!tbody.dataset.dragAttached) {
+    tbody.dataset.dragAttached = '1';
+    tbody.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    const dragging = document.querySelector('.dragging');
+    if (!dragging) return;
+    const after = getDragAfterElement(tbody, e.clientY);
+    if (after == null) tbody.appendChild(dragging);
+    else tbody.insertBefore(dragging, after);
+    });
+  }
 }
 
 // popups do the edit/add/delete, so keep editor hidden in main page
