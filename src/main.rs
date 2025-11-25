@@ -299,7 +299,11 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
         // use a large width so html2text doesn't insert forced newlines
         let text = html_to_text(&body);
         if !text.trim().is_empty() {
-            parts.push((_idx, text.trim().to_string()));
+            // Preserve spaces and tabs coming from the fetched content unchanged.
+            // We still use `text.trim().is_empty()` to skip completely-empty responses
+            // but we don't trim the content when storing so leading/trailing spaces/tabs
+            // within the link body are kept.
+            parts.push((_idx, text.to_string()));
         }
     }
 
@@ -339,27 +343,23 @@ fn html_to_text(input: &str) -> String {
     let re_block_close = Regex::new(r"(?i)</(p|div|li|h[1-6]|tr|section|header|footer|article|blockquote|table|tbody|thead|ul|ol)>\s*").unwrap();
     let with_blocks = re_block_close.replace_all(&with_br, "\n\n");
 
-    // strip any remaining tags
+    // strip any remaining tags (remove them entirely; block-level separators were
+    // inserted previously so we don't need tag->space substitution)
     let re_tags = Regex::new(r"(?s)<[^>]+>").unwrap();
-    let stripped = re_tags.replace_all(&with_blocks, " ");
+    let stripped = re_tags.replace_all(&with_blocks, "");
 
-    // collapse non-newline whitespace (spaces/tabs) but preserve newlines
-    let re_space = Regex::new(r"[^\S\r\n]+").unwrap();
-    let collapsed = re_space.replace_all(&stripped, " ");
+    // Keep spaces and tabs as they appear in the body. We intentionally do not
+    // collapse multiple spaces or tabs — the client asked to preserve them.
+    let collapsed = stripped;
 
     // collapse runs of 3+ newlines down to at most two
     let re_multi_nl = Regex::new(r"\n{3,}").unwrap();
     let collapsed_nl = re_multi_nl.replace_all(&collapsed, "\n\n");
 
-    // remove spaces that appear after/before a newline so lines don't start/end with spaces
-    let re_nl_leading_ws = Regex::new(r"\n[ \t]+").unwrap();
-    let no_leading = re_nl_leading_ws.replace_all(&collapsed_nl, "\n");
-    let re_trailing_ws = Regex::new(r"[ \t]+\n").unwrap();
-    let no_trailing = re_trailing_ws.replace_all(&no_leading, "\n");
-
     // restore preformatted newlines
-    let restored = no_trailing.replace(pre_token, "\n");
-    decode_html_entities(&restored.trim()).to_string()
+    let restored = collapsed_nl.replace(pre_token, "\n");
+    // Do NOT trim — preserve leading/trailing spaces and tabs inside content
+    decode_html_entities(&restored).to_string()
 }
 #[get("/healthz")]
 async fn healthz() -> impl Responder {
@@ -520,14 +520,31 @@ mod tests {
     }
 
     #[actix_web::test]
+    async fn test_html_to_text_preserve_spaces_and_tabs() {
+        let html = "<div>one\t\ttwo   three</div>";
+        let out = html_to_text(html);
+        assert!(out.contains("one\t\ttwo   three"), "got: {}", out);
+
+        let html2 = "<div>  leading and\ttrailing  </div>";
+        let out2 = html_to_text(html2);
+        // internal spaces and tabs should be preserved (we allow leading/trailing
+        // to remain since user requested keeping spaces/tabs)
+        assert!(out2.contains("  leading and\ttrailing  "), "got: {}", out2);
+    }
+
+    #[actix_web::test]
     async fn test_static_serves_favicon() {
-        use actix_web::{test, App};
+        use actix_web::{App, test};
         // Initialize app with only the static_files service
         let app = test::init_service(App::new().service(static_files)).await;
 
         let req = test::TestRequest::with_uri("/static/favicon.ico").to_request();
         let resp = test::call_service(&app, req).await;
         // Ensure we get 200 OK for the favicon
-        assert!(resp.status().is_success(), "favicon not served: {}", resp.status());
+        assert!(
+            resp.status().is_success(),
+            "favicon not served: {}",
+            resp.status()
+        );
     }
 }
