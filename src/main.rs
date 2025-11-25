@@ -317,14 +317,49 @@ fn html_to_text(input: &str) -> String {
     let re_script = Regex::new(r"(?is)<(script|style)[^>]*>.*?</(script|style)>").unwrap();
     let without_scripts = re_script.replace_all(input, "");
 
-    // strip remaining tags
-    let re_tags = Regex::new(r"(?s)<[^>]+>").unwrap();
-    let stripped = re_tags.replace_all(&without_scripts, " ");
+    // Preserve <pre> contents (keep internal newlines). We will remove the enclosing tags
+    // but keep what's inside intact so preformatted text retains line breaks.
+    // We'll encode newlines inside <pre> blocks into a placeholder so later
+    // trimming/collapsing won't accidentally remove leading spaces that are
+    // meant to be preserved inside preformatted sections.
+    let pre_token = "___PRE_NL___";
+    let re_pre = Regex::new(r"(?is)<pre[^>]*>(?s)(.*?)</pre>").unwrap();
+    let with_pre = re_pre.replace_all(&without_scripts, |caps: &regex::Captures| {
+        let inner = &caps[1];
+        // normalize CRLF and encode newlines to token
+        let encoded = inner.replace("\r\n", "\n").replace("\n", pre_token);
+        format!("\n\n{}\n\n", encoded)
+    });
 
-    // collapse whitespace and decode entities
-    let re_space = Regex::new(r"\s+").unwrap();
-    let joined = re_space.replace_all(&stripped, " ");
-    decode_html_entities(&joined.trim()).to_string()
+    // Convert <br> to a newline
+    let re_br = Regex::new(r"(?i)<br\s*/?>").unwrap();
+    let with_br = re_br.replace_all(&with_pre, "\n");
+
+    // Treat common block-level closing tags as paragraph separators (insert blank line)
+    let re_block_close = Regex::new(r"(?i)</(p|div|li|h[1-6]|tr|section|header|footer|article|blockquote|table|tbody|thead|ul|ol)>\s*").unwrap();
+    let with_blocks = re_block_close.replace_all(&with_br, "\n\n");
+
+    // strip any remaining tags
+    let re_tags = Regex::new(r"(?s)<[^>]+>").unwrap();
+    let stripped = re_tags.replace_all(&with_blocks, " ");
+
+    // collapse non-newline whitespace (spaces/tabs) but preserve newlines
+    let re_space = Regex::new(r"[^\S\r\n]+").unwrap();
+    let collapsed = re_space.replace_all(&stripped, " ");
+
+    // collapse runs of 3+ newlines down to at most two
+    let re_multi_nl = Regex::new(r"\n{3,}").unwrap();
+    let collapsed_nl = re_multi_nl.replace_all(&collapsed, "\n\n");
+
+    // remove spaces that appear after/before a newline so lines don't start/end with spaces
+    let re_nl_leading_ws = Regex::new(r"\n[ \t]+").unwrap();
+    let no_leading = re_nl_leading_ws.replace_all(&collapsed_nl, "\n");
+    let re_trailing_ws = Regex::new(r"[ \t]+\n").unwrap();
+    let no_trailing = re_trailing_ws.replace_all(&no_leading, "\n");
+
+    // restore preformatted newlines
+    let restored = no_trailing.replace(pre_token, "\n");
+    decode_html_entities(&restored.trim()).to_string()
 }
 #[get("/healthz")]
 async fn healthz() -> impl Responder {
@@ -460,5 +495,39 @@ mod tests {
             .to_request();
         let resp = test::call_service(&app, req).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[actix_web::test]
+    async fn test_html_to_text_preserve_br_and_pre() {
+        let html_br = "<div>line1<br/>line2</div>";
+        let out_br = html_to_text(html_br);
+        // Expect a newline between lines (do not collapse into single line)
+        assert!(out_br.contains("line1\nline2"), "got: {}", out_br);
+
+        let html_pre = "<pre>one\n two\nthree</pre>";
+        let out_pre = html_to_text(html_pre);
+        // Pre should preserve internal newlines
+        assert!(out_pre.contains("one\n two\nthree"), "got: {}", out_pre);
+    }
+
+    #[actix_web::test]
+    async fn test_html_to_text_block_tags() {
+        let html = "<p>first paragraph</p><div>second</div><p>third</p>";
+        let out = html_to_text(html);
+        // Expect paragraph-level separation
+        assert!(out.contains("first paragraph\n\nsecond"), "got: {}", out);
+        assert!(out.contains("second\n\nthird"), "got: {}", out);
+    }
+
+    #[actix_web::test]
+    async fn test_static_serves_favicon() {
+        use actix_web::{test, App};
+        // Initialize app with only the static_files service
+        let app = test::init_service(App::new().service(static_files)).await;
+
+        let req = test::TestRequest::with_uri("/static/favicon.ico").to_request();
+        let resp = test::call_service(&app, req).await;
+        // Ensure we get 200 OK for the favicon
+        assert!(resp.status().is_success(), "favicon not served: {}", resp.status());
     }
 }
