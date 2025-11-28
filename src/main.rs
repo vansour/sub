@@ -1,5 +1,8 @@
 use actix_files::NamedFile;
-use actix_web::{App, HttpResponse, HttpServer, Responder, Result, delete, get, post, put, web};
+use actix_web::{
+    App, HttpResponse, HttpServer, Responder, Result, delete, get, middleware::Logger, post, put,
+    web,
+};
 use futures::stream::{FuturesUnordered, StreamExt};
 use html_escape::decode_html_entities;
 use regex::Regex;
@@ -8,6 +11,7 @@ use std::collections::HashSet;
 use std::fs;
 // Cursor imports removed (not needed)
 use std::sync::Mutex;
+mod log;
 
 const DATA_FILE: &str = "data/data.toml";
 
@@ -42,7 +46,7 @@ fn load_data() -> Vec<UserRecord> {
                 match serde_json::from_str::<Vec<UserRecord>>(&s) {
                     Ok(list) => list,
                     Err(_) => {
-                        eprintln!("failed to parse data file as TOML: {}", e);
+                        tracing::error!("failed to parse data file as TOML: {}", e);
                         Vec::new()
                     }
                 }
@@ -135,6 +139,7 @@ async fn create_user(
     };
     users.push(rec);
     save_data(&users);
+    tracing::info!(%username, "user created");
     HttpResponse::Created().json(username)
 }
 
@@ -152,8 +157,10 @@ async fn delete_user(
     if let Some(pos) = users.iter().position(|u| u.username == username) {
         users.remove(pos);
         save_data(&users);
+        tracing::info!(%username, "user deleted");
         HttpResponse::Ok().body("deleted")
     } else {
+        tracing::warn!(%username, "user not found for delete");
         HttpResponse::NotFound().body("not found")
     }
 }
@@ -170,8 +177,10 @@ async fn get_links(
     let username = path.into_inner();
     let users = data.users.lock().unwrap();
     if let Some(u) = users.iter().find(|u| u.username == username) {
+        tracing::info!(%username, count = u.links.len(), "get_links");
         HttpResponse::Ok().json(u.links.clone())
     } else {
+        tracing::warn!(%username, "get_links: user not found");
         HttpResponse::NotFound().body("user not found")
     }
 }
@@ -205,6 +214,7 @@ async fn set_links(
         if let Some(u) = users.iter_mut().find(|u| u.username == username) {
             u.links = new_links.clone();
         } else {
+            tracing::warn!(%username, "set_links: user not found");
             return HttpResponse::NotFound().body("user not found");
         }
         // save updated list
@@ -233,6 +243,7 @@ async fn set_user_order(
     let existing: HashSet<String> = users.iter().map(|u| u.username.clone()).collect();
     let incoming: HashSet<String> = order.iter().cloned().collect();
     if existing != incoming {
+        tracing::warn!(expected = ?existing, incoming = ?incoming, "set_user_order: incoming order mismatch");
         return HttpResponse::BadRequest().body("order must include exactly the same usernames");
     }
 
@@ -246,6 +257,7 @@ async fn set_user_order(
 
     *users = reordered;
     save_data(&users);
+    tracing::info!(count = users.len(), "set_user_order updated");
     HttpResponse::Ok().json(order)
 }
 
@@ -253,6 +265,7 @@ async fn set_user_order(
 #[get("/{username}")]
 async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
     let username = path.into_inner();
+    tracing::info!(%username, "Handling merged_user request");
     // take a short-lived lock to clone the user record, don't hold the MutexGuard across await points
     let user = {
         let users = data.users.lock().unwrap();
@@ -284,9 +297,15 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
             let resp_text = match c.get(&link).send().await {
                 Ok(r) => match r.text().await {
                     Ok(t) => t,
-                    Err(e) => format!("<!-- failed to read body {}: {} -->", link, e),
+                    Err(e) => {
+                        tracing::warn!(%link, error=%e, "failed to read body");
+                        format!("<!-- failed to read body {}: {} -->", link, e)
+                    }
                 },
-                Err(e) => format!("<!-- failed to fetch {}: {} -->", link, e),
+                Err(e) => {
+                    tracing::warn!(%link, error=%e, "failed to fetch link");
+                    format!("<!-- failed to fetch {}: {} -->", link, e)
+                }
             };
             (idx, link, resp_text)
         });
@@ -386,21 +405,24 @@ async fn main() -> std::io::Result<()> {
 
     let map = load_data();
 
-    // read expected API key from env: prefer API (compose), fallback to SUB_API_KEY, default to 'api'
-    let api_key = std::env::var("API")
-        .ok()
-        .or_else(|| std::env::var("SUB_API_KEY").ok())
-        .unwrap_or_else(|| "api".into());
+    // read expected API key from env: prefer API (compose); default to 'api'
+    let api_key = std::env::var("API").unwrap_or_else(|_| "api".into());
     let state = web::Data::new(AppState {
         users: Mutex::new(map),
         api_key,
     });
 
-    println!("Starting server at http://0.0.0.0:8080");
+    // Initialize structured logging for Docker-friendly output
+    log::init_logging();
+    tracing::info!("Starting server at http://0.0.0.0:8080");
 
     HttpServer::new(move || {
         App::new()
             .app_data(state.clone())
+            // Create a tracing span per request (adds structured fields like path, method, client IP, user-agent, request-id)
+            .wrap(actix_web::middleware::from_fn(log::trace_requests))
+            // Keep the actix Logger to maintain formatted request lines if desired
+            .wrap(Logger::new("%a \"%r\" %s %b %D \"%{User-Agent}i\""))
             .service(index)
             .service(static_files)
             .service(list_users)
@@ -546,5 +568,21 @@ mod tests {
             "favicon not served: {}",
             resp.status()
         );
+    }
+
+    #[actix_web::test]
+    async fn test_x_request_id_header_present() {
+        use actix_web::{App, test};
+        // Initialize app with middleware and a route
+        let app = test::init_service(
+            App::new()
+                .wrap(actix_web::middleware::from_fn(crate::log::trace_requests))
+                .service(healthz),
+        )
+        .await;
+
+        let req = test::TestRequest::get().uri("/healthz").to_request();
+        let resp = test::call_service(&app, req).await;
+        assert!(resp.headers().contains_key("x-request-id"));
     }
 }

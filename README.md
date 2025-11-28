@@ -46,7 +46,7 @@ PUT /api/users/order
 2. 必须设置服务端 API 密钥（UI 访问需携带正确的 api 参数）。你可以通过环境变量来设置：
 
 ```bash
-export SUB_API_KEY=some-secret-value
+export API=some-secret-value
 ```
 
 3. 在仓库根目录运行本地二进制：
@@ -57,10 +57,10 @@ cargo run --release
 
 Docker / Docker Compose（推荐用于生产或容器化运行）
 
-设置 API Key（compose 会把环境变量 SUB_API_KEY 注入容器）：
+设置 API Key（compose 会把环境变量 `API` 注入容器）：
 
 ```bash
-export SUB_API_KEY=my-secret-key
+export API=my-secret-key
 ```
 
 使用 Docker Compose 来构建并运行：
@@ -70,6 +70,31 @@ docker compose up --build -d
 ```
 
 服务会在 http://127.0.0.1:8080 可用，访问时请使用 ?api= 参数，例如：
+
+Logging
+-------
+为方便在容器中采集与分析日志（如 Docker / Kubernetes），日志现在支持结构化输出和丰富的 HTTP 请求日志格式：
+
+- 使用环境变量 `LOG_JSON=1` 打开 JSON 日志行输出，这能方便 Logstash/Fluentd/Cloud logging 解析和查询；默认为文本格式。
+- 使用环境变量 `RUST_LOG` 设置日志级别，例如 `RUST_LOG=info` 或 `RUST_LOG=debug`。
+- 内置按请求日志（IP、请求行、状态、响应体大小、耗时、User-Agent）由 actix 的 `Logger` middleware 输出。
+- 对每个 HTTP 请求创建 tracing span，日志中将包含结构化字段：`method`, `path`, `client_ip`, `user_agent`, `request_id`, `status`, `elapsed_ms`。
+	这些字段可用于集中化日志与追踪系统查询与聚合。
+	如果请求没有 `x-request-id` header，服务端会生成并在响应头中返回 `x-request-id`，便于日志追踪关联。
+
+在 Docker Compose 中建议设置如下（示例）：
+
+```yaml
+services:
+	sub:
+		environment:
+			- API=${API}
+			- LOG_JSON=1
+			- RUST_LOG=info
+```
+
+在容器中，使用 `docker logs` 或集成的日志系统（如 Stackdriver / Fluentd / ELK）即可收集 JSON 日志行。
+
 
 http://127.0.0.1:8080/?api=my-secret-key
 

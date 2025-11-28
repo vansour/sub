@@ -12,4 +12,13 @@ services:
       - ./data:/app/data
     environment:
       - API=${API:-api}
+      - RUST_LOG=${RUST_LOG:-info}
+      - LOG_JSON=${LOG_JSON:-1}
     restart: unless-stopped
+        logging:
+      driver: 'json-file'
+      options:
+        max-size: '10m'
+        max-file: '3'
+    dns:
+      - '1.1.1.1'
