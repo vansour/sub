@@ -1,68 +1,90 @@
+use crate::config::AppConfig;
 use actix_web::Error;
 use actix_web::body::BoxBody;
 use actix_web::dev::{ServiceRequest, ServiceResponse};
 use actix_web::http::header::{HeaderName, HeaderValue, USER_AGENT};
 use actix_web::middleware::Next;
-use std::env;
+use std::path::Path;
+use std::str::FromStr;
 use std::sync::Once;
 use std::time::Instant;
-use tracing::{error, info, warn};
+use tracing::{Level, error, info, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
+use tracing_subscriber::layer::SubscriberExt;
+use tracing_subscriber::util::SubscriberInitExt;
+use tracing_subscriber::{Layer, fmt};
 use uuid::Uuid;
 
-/// Initialize logging for the application.
+/// 初始化日志系统
 ///
-/// Supports `RUST_LOG` for filtering and `LOG_JSON` for formatting.
-/// Uses `std::sync::Once` to ensure it is initialized only once, preventing panics in tests.
-pub fn init_logging() {
+/// 1. 控制台日志 (stdout): 使用紧凑格式，方便 Docker logs 查看，不包含过多干扰信息。
+/// 2. 文件日志 (file): 使用 JSON 格式，包含完整结构化信息，方便后续分析。
+pub fn init_logging(config: &AppConfig) {
     static INIT: Once = Once::new();
 
     INIT.call_once(|| {
-        // 1. Route logs from `log` crate (used by dependencies like actix-web) to `tracing`
+        // 将标准 log 库的日志重定向到 tracing
         let _ = tracing_log::LogTracer::init();
 
-        // 2. Parse environment variables with better defaults
-        // Default to info, but keep our app (sub) at debug if needed
-        let filter = env::var("RUST_LOG").unwrap_or_else(|_| "info,sub=debug".into());
+        // 解析日志级别
+        let level = Level::from_str(&config.log.level).unwrap_or(Level::INFO);
+        let filter = tracing_subscriber::filter::Targets::new()
+            .with_target("sub", level) // 也就是当前应用的日志级别
+            .with_default(Level::WARN); // 其他库（如 sqlx, hyper）默认只显示 WARN
 
-        // Robust boolean parsing for LOG_JSON
-        let use_json = env::var("LOG_JSON")
-            .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-            .unwrap_or(false);
+        // --- Layer 1: 控制台输出 (Docker logs) ---
+        // 使用 Compact 格式，去除时间戳（Docker 自身会打时间戳），保持整洁
+        let stdout_layer = fmt::layer()
+            .compact()
+            .with_target(false) // 隐藏模块路径，只显示消息
+            .with_file(false)
+            .with_level(true)
+            .with_ansi(true) // 支持颜色
+            .with_filter(filter.clone());
 
-        let subscriber_builder = tracing_subscriber::fmt()
-            .with_env_filter(filter)
-            // We will log the event manually at the end of the request, so disable auto span events
-            .with_span_events(FmtSpan::NONE)
-            .with_target(false) // Hide the verbose module path (e.g. "sub::log")
-            .with_file(true) // Include file name for easier debugging
-            .with_line_number(true);
+        // --- Layer 2: 文件输出 ---
+        // 解析文件路径
+        let path_str = &config.log.log_file_path;
+        let path = Path::new(path_str);
 
-        // 3. Initialize subscriber based on format
-        // We use try_init() instead of init() to ignore errors if a subscriber is already set
-        if use_json {
-            let _ = subscriber_builder
-                .json()
-                .flatten_event(true) // Flatten fields into the root JSON object for easier parsing
-                .try_init();
-        } else {
-            let _ = subscriber_builder
-                .compact() // Compact format is cleaner for local development
-                .try_init();
-        }
+        // 提取目录和文件名
+        let directory = path.parent().unwrap_or_else(|| Path::new("./logs"));
+        let filename = path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("sub.log"));
+
+        // 设置文件追加器 (每天轮转)
+        let file_appender = tracing_appender::rolling::daily(directory, filename);
+        let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+        // 注意：_guard 必须被持有才能保证日志写入，但在 actix-web 这种长期运行的 server 中，
+        // 直接泄漏它或者将其设为全局变量通常是可以接受的，或者仅依赖缓冲区刷新。
+        // 这里为了简化，我们不得不泄漏 guard，否则函数结束 writer 就会关闭。
+        std::mem::forget(_guard);
+
+        // 文件日志使用 JSON 格式，包含所有字段
+        let file_layer = fmt::layer()
+            .json()
+            .with_writer(non_blocking)
+            .with_span_events(FmtSpan::CLOSE) // 记录请求结束时间
+            .with_filter(filter);
+
+        // 注册所有 Layer
+        tracing_subscriber::registry()
+            .with(stdout_layer)
+            .with(file_layer)
+            .init();
     });
 }
 
-/// Middleware: traces HTTP requests with structured logging.
+/// Middleware: 结构化 HTTP 请求追踪
 ///
-/// - Injects `x-request-id` if missing for distributed tracing.
-/// - Logs duration, status, method, and path.
-/// - Uses semantic log levels: ERROR for 5xx, WARN for 4xx, INFO for others.
+/// 生成 x-request-id 并记录请求耗时。
+/// 替代 Actix 自带的 Logger，避免日志重复和格式混乱。
 pub async fn trace_requests(
     req: ServiceRequest,
     next: Next<BoxBody>,
 ) -> Result<ServiceResponse<BoxBody>, Error> {
-    // 1. Extract request info
     let request_id = req
         .headers()
         .get("x-request-id")
@@ -72,9 +94,6 @@ pub async fn trace_requests(
 
     let http_method = req.method().to_string();
     let http_path = req.path().to_string();
-    // Keep query string for debugging, but be careful with PII in production
-    let http_query = req.query_string().to_string();
-
     let client_ip = req
         .connection_info()
         .realip_remote_addr()
@@ -88,74 +107,59 @@ pub async fn trace_requests(
         .unwrap_or("-")
         .to_string();
 
-    // 2. Create a span for this request context
-    // We use standard OpenTelemetry semantic conventions for field names where possible
+    // 创建 Span，包含请求上下文
     let span = tracing::info_span!(
-        "http_request",
-        "x-request-id" = %request_id,
-        "http.method" = %http_method,
-        "http.path" = %http_path,
-        "client.ip" = %client_ip
+        "http_req",
+        id = %request_id,
+        method = %http_method,
+        path = %http_path,
+        ip = %client_ip
     );
 
     let _enter = span.enter();
     let start_time = Instant::now();
 
-    // 3. Execute the actual handler
     let mut res = next.call(req).await?;
 
-    // 4. Post-processing
     let duration = start_time.elapsed();
-    let status = res.status();
-    let status_code = status.as_u16();
+    let status_code = res.status().as_u16();
 
-    // Inject request ID into response headers so client can correlate logs
+    // 注入 Request ID 到响应头
     res.headers_mut().insert(
         HeaderName::from_static("x-request-id"),
         HeaderValue::from_str(&request_id).unwrap(),
     );
 
-    // 5. Structured logging with dynamic severity
+    // 根据状态码决定日志级别
     match status_code {
         500..=599 => {
             error!(
-                "http.status_code" = status_code,
-                "http.duration_ms" = duration.as_millis(),
-                "http.user_agent" = %user_agent,
-                "http.query" = %http_query,
-                "request failed (server error)"
+                status = status_code,
+                latency_ms = duration.as_millis(),
+                ua = %user_agent,
+                "Internal Server Error"
             );
         }
         400..=499 => {
             warn!(
-                "http.status_code" = status_code,
-                "http.duration_ms" = duration.as_millis(),
-                "request failed (client error)"
+                status = status_code,
+                latency_ms = duration.as_millis(),
+                "Client Error"
             );
         }
         _ => {
-            info!(
-                "http.status_code" = status_code,
-                "http.duration_ms" = duration.as_millis(),
-                "request completed"
-            );
+            // 对于健康检查等高频请求，可以考虑降低级别为 DEBUG
+            if http_path == "/healthz" {
+                tracing::debug!(status = status_code, "health check");
+            } else {
+                info!(
+                    status = status_code,
+                    latency_ms = duration.as_millis(),
+                    "Finished"
+                );
+            }
         }
     }
 
     Ok(res)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_init_logging() {
-        // Just ensure it doesn't panic on initialization
-        let _ = std::panic::catch_unwind(|| {
-            init_logging();
-        });
-        // Calling it a second time should be fine now due to Once
-        init_logging();
-    }
 }

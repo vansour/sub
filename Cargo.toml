@@ -15,6 +15,7 @@ rand = "0.8"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros"] }
+# 恢复 sqlx 配置，移除了 migrate 特性
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"] }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli", "deflate", "stream"] }
 # 移除 regex 和 html-escape，引入更强大的 scraper
@@ -24,6 +25,11 @@ ego-tree = "0.10.0"
 url = "2.5.7"
 futures = "0.3.31"
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
+# 增加 registry 特性以支持多层订阅者
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json", "registry"] }
 tracing-log = "0.1"
+# 新增日志文件追加器
+tracing-appender = "0.2"
+# 新增配置管理
+config = "0.14"
 uuid = { version = "1.5", features = ["v4"] }

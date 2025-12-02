@@ -2,11 +2,20 @@ use actix_files::NamedFile;
 use actix_identity::{Identity, IdentityMiddleware};
 use actix_session::{SessionMiddleware, config::PersistentSession, storage::CookieSessionStore};
 use actix_web::{
-    App, HttpMessage, HttpRequest, HttpResponse, HttpServer, Responder, Result,
+    App,
+    HttpMessage,
+    HttpRequest,
+    HttpResponse,
+    HttpServer,
+    Responder,
+    Result,
     cookie::{Key, time::Duration},
-    delete, get,
-    middleware::Logger,
-    post, put, web,
+    delete,
+    get,
+    // 移除 middleware::Logger 以避免日志混乱
+    post,
+    put,
+    web,
 };
 use argon2::{
     Argon2,
@@ -18,6 +27,7 @@ use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
 use std::path::Path;
 
+mod config; // 新增模块
 mod log;
 
 const DB_URL: &str = "sqlite:data/sub.db";
@@ -50,7 +60,7 @@ fn is_valid_username(username: &str) -> bool {
         .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
 }
 
-// 初始化数据库表
+// 初始化数据库表 (恢复此函数，替代 migrate! 宏)
 async fn init_db(pool: &SqlitePool) -> std::result::Result<(), sqlx::Error> {
     // 用户表
     sqlx::query(
@@ -95,10 +105,14 @@ async fn ensure_admin(pool: &SqlitePool) {
 
         let salt = SaltString::generate(&mut OsRng);
         let argon2 = Argon2::default();
-        let password_hash = argon2
-            .hash_password(password.as_bytes(), &salt)
-            .unwrap()
-            .to_string();
+
+        let password_hash = match argon2.hash_password(password.as_bytes(), &salt) {
+            Ok(h) => h.to_string(),
+            Err(e) => {
+                tracing::error!("Failed to hash default password: {}", e);
+                return;
+            }
+        };
 
         let _ = sqlx::query("INSERT INTO admins (username, password_hash) VALUES (?, ?)")
             .bind(&username)
@@ -126,13 +140,24 @@ async fn login(
     match row {
         Ok(Some(r)) => {
             let hash_str: String = r.get(0);
-            let parsed_hash = PasswordHash::new(&hash_str).unwrap();
+            // 优化: 安全地解析 DB 中的哈希字符串
+            let parsed_hash = match PasswordHash::new(&hash_str) {
+                Ok(h) => h,
+                Err(e) => {
+                    tracing::error!("Invalid password hash stored in DB: {}", e);
+                    return HttpResponse::InternalServerError().body("Auth error");
+                }
+            };
+
             if Argon2::default()
                 .verify_password(payload.password.as_bytes(), &parsed_hash)
                 .is_ok()
             {
-                // 登录成功，设置 Identity
-                Identity::login(&req.extensions(), payload.username.clone()).unwrap();
+                // 优化: 处理 Identity login 失败
+                if let Err(e) = Identity::login(&req.extensions(), payload.username.clone()) {
+                    tracing::error!("Failed to attach identity: {}", e);
+                    return HttpResponse::InternalServerError().body("Login session error");
+                }
                 return HttpResponse::Ok().json("Logged in");
             }
         }
@@ -152,7 +177,14 @@ async fn logout(id: Identity) -> impl Responder {
 #[get("/api/auth/me")]
 async fn get_me(id: Option<Identity>) -> impl Responder {
     match id {
-        Some(id) => HttpResponse::Ok().json(serde_json::json!({ "username": id.id().unwrap() })),
+        // 优化: 处理获取 ID 时的潜在错误
+        Some(id) => match id.id() {
+            Ok(username) => HttpResponse::Ok().json(serde_json::json!({ "username": username })),
+            Err(e) => {
+                tracing::warn!("Identity found but ID is invalid: {}", e);
+                HttpResponse::Unauthorized().body("Invalid session")
+            }
+        },
         None => HttpResponse::Unauthorized().body("Not logged in"),
     }
 }
@@ -186,7 +218,6 @@ async fn update_account(
         Err(e) => return HttpResponse::InternalServerError().body(format!("Hash error: {}", e)),
     };
 
-    // Update DB (Primary key update)
     let result =
         sqlx::query("UPDATE admins SET username = ?, password_hash = ? WHERE username = ?")
             .bind(new_username)
@@ -197,13 +228,11 @@ async fn update_account(
 
     match result {
         Ok(_) => {
-            // 登出用户，要求重新登录
             id.logout();
             HttpResponse::Ok().body("Account updated, please login again")
         }
         Err(e) => {
             tracing::error!("Update account error: {}", e);
-            // 可能是用户名冲突
             HttpResponse::InternalServerError()
                 .body("Failed to update account (username might exist)")
         }
@@ -231,7 +260,6 @@ async fn static_files(path: web::Path<String>) -> Result<NamedFile> {
 
 #[get("/api/users")]
 async fn list_users(_id: Identity, data: web::Data<AppState>) -> impl Responder {
-    // Identity 提取器会自动验证是否登录，未登录则返回 401
     let rows = sqlx::query("SELECT username FROM users ORDER BY rank ASC")
         .fetch_all(&data.db)
         .await;
@@ -438,7 +466,6 @@ async fn set_user_order(
     HttpResponse::Ok().json(order)
 }
 
-// 公开接口，无需登录
 #[get("/{username}")]
 async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
     let username = path.into_inner();
@@ -466,10 +493,17 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
             .body("");
     }
 
-    let client = reqwest::Client::builder()
+    // 优化: 避免 reqwest builder 的 unwrap
+    let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
-        .unwrap();
+    {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Failed to build reqwest client: {}", e);
+            return HttpResponse::InternalServerError().body("Internal Server Error");
+        }
+    };
 
     let fetches = futures::stream::iter(links.into_iter().enumerate().map(|(idx, link)| {
         let client = client.clone();
@@ -506,29 +540,25 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
         .body(full_text)
 }
 
-// 使用 Scraper 库来遍历 DOM 树，提取文本，并处理块级元素的换行
 fn html_to_text(input: &str) -> String {
     let document = Html::parse_document(input);
     let mut buffer = String::new();
-    // FIX: 获取 root 的 ID
     walk_node(document.tree.root().id(), &document, &mut buffer);
-    // 移除首尾空白，但保留内部换行结构
     buffer.trim().to_string()
 }
 
-// 递归遍历节点
 fn walk_node(node_id: ego_tree::NodeId, doc: &Html, buffer: &mut String) {
-    let node = doc.tree.get(node_id).unwrap();
+    let node = if let Some(n) = doc.tree.get(node_id) {
+        n
+    } else {
+        return;
+    };
 
     if let Node::Element(element) = node.value() {
         let tag = element.name();
-
-        // 1. 跳过不需要的标签
         if tag == "script" || tag == "style" || tag == "head" {
             return;
         }
-
-        // 2. 处理块级元素前置换行
         if is_block_element(tag) {
             ensure_newlines(buffer, 2);
         } else if tag == "br" {
@@ -536,11 +566,7 @@ fn walk_node(node_id: ego_tree::NodeId, doc: &Html, buffer: &mut String) {
         }
     }
 
-    // 3. 处理文本节点
     if let Node::Text(text) = node.value() {
-        // Scraper 默认已经解码了 HTML 实体
-        // 我们简单地将连续的空白字符折叠成一个空格（类似浏览器渲染），
-        // 但如果是在 pre 标签内则应保留（这里简化处理，不做复杂的 CSS 样式判断）
         let s = text.trim();
         if !s.is_empty() {
             if buffer.ends_with(|c: char| !c.is_whitespace()) {
@@ -550,21 +576,17 @@ fn walk_node(node_id: ego_tree::NodeId, doc: &Html, buffer: &mut String) {
         }
     }
 
-    // 4. 递归子节点
-    // FIX: 这里的 child 是 NodeRef，需要调用 .id() 获取 NodeId
     for child in node.children() {
         walk_node(child.id(), doc, buffer);
     }
 
-    // 5. 处理块级元素后置换行（闭合标签效果）
-    if let Node::Element(element) = node.value() {
-        if is_block_element(element.name()) {
-            ensure_newlines(buffer, 2);
-        }
+    if let Node::Element(element) = node.value()
+        && is_block_element(element.name())
+    {
+        ensure_newlines(buffer, 2);
     }
 }
 
-// 辅助函数：确保缓冲区末尾有至少 n 个换行符
 fn ensure_newlines(buffer: &mut String, n: usize) {
     if buffer.is_empty() {
         return;
@@ -612,7 +634,7 @@ fn is_block_element(tag: &str) -> bool {
             | "tfoot"
             | "ul"
             | "video"
-            | "tr" // 虽然 tr 不是顶级块，但在文本提取中常需要换行
+            | "tr"
     )
 }
 
@@ -623,6 +645,18 @@ async fn healthz() -> impl Responder {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
+    // 1. 加载配置
+    let config = match config::AppConfig::load() {
+        Ok(cfg) => cfg,
+        Err(e) => {
+            eprintln!("Failed to load config: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    // 2. 初始化日志
+    log::init_logging(&config);
+
     let db_path = Path::new("data/sub.db");
     if let Some(dir) = db_path.parent() {
         let _ = std::fs::create_dir_all(dir);
@@ -632,7 +666,6 @@ async fn main() -> std::io::Result<()> {
         std::fs::File::create(db_path)?;
     }
 
-    // 读取或生成 SESSION KEY
     let secret_key = Key::generate();
 
     let pool = SqlitePoolOptions::new()
@@ -641,6 +674,7 @@ async fn main() -> std::io::Result<()> {
         .await
         .expect("Failed to connect to SQLite");
 
+    // 恢复调用 init_db 而不是使用 migrate 宏
     init_db(&pool)
         .await
         .expect("Failed to initialize DB schema");
@@ -648,22 +682,20 @@ async fn main() -> std::io::Result<()> {
     ensure_admin(&pool).await;
 
     let state = web::Data::new(AppState { db: pool });
+    let bind_addr = format!("{}:{}", config.server.host, config.server.port);
 
-    log::init_logging();
-    tracing::info!("Starting server at http://0.0.0.0:8080 with SQLite");
+    tracing::info!("Starting server at http://{} with SQLite", bind_addr);
 
     HttpServer::new(move || {
         App::new()
             .app_data(state.clone())
             .wrap(actix_web::middleware::from_fn(log::trace_requests))
-            .wrap(Logger::new("%a \"%r\" %s %b %D \"%{User-Agent}i\""))
-            // 启用 Identity 身份验证中间件
+            // 移除了 Actix 的 Logger 避免重复日志
             .wrap(IdentityMiddleware::default())
-            // 启用 Session 中间件
             .wrap(
                 SessionMiddleware::builder(CookieSessionStore::default(), secret_key.clone())
                     .cookie_name("sub_auth".to_owned())
-                    .cookie_secure(false) // 生产环境建议为 true 并配合 HTTPS
+                    .cookie_secure(false)
                     .session_lifecycle(PersistentSession::default().session_ttl(Duration::days(7)))
                     .build(),
             )
@@ -682,7 +714,7 @@ async fn main() -> std::io::Result<()> {
             .service(healthz)
             .service(merged_user)
     })
-    .bind(("0.0.0.0", 8080))?
+    .bind(&bind_addr)?
     .run()
     .await
 }
