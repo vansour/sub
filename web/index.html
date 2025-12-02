@@ -1,89 +1,148 @@
 <!doctype html>
-<html>
+<html lang="zh-CN">
 
 <head>
   <meta charset="utf-8" />
-  <title>Sub — Multi-user Link Merger</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sub — 链接聚合</title>
   <link rel="icon" href="/static/favicon.ico" />
   <link rel="stylesheet" href="/static/style.css" />
+  <!-- 引入 Google Fonts (Inter) 以获得更好的排版 -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 </head>
 
 <body>
-  <main>
-    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom: 14px;">
-      <h1>Sub — 多用户多链接合并器</h1>
-      <button id="btn-logout" class="btn-small hidden">登出</button>
-    </div>
-
-    <section id="controls">
-      <button id="add-user" class="accent-btn">添加用户</button>
-    </section>
-
-    <section id="users">
-      <h2>用户列表 <small class="muted">（可拖拽排序）</small></h2>
-      <div class="table-wrap">
-        <table id="user-table" class="user-table">
-          <thead>
-            <tr>
-              <th>用户名</th>
-              <th>操作</th>
-            </tr>
-          </thead>
-          <tbody id="user-list"></tbody>
-        </table>
+  <div class="app-container">
+    <header class="app-header">
+      <div class="header-left">
+        <div class="logo-icon">S</div>
+        <h1>Sub <span class="badge">Link Aggregator</span></h1>
       </div>
-    </section>
+      <div class="header-right">
+        <button id="add-user" class="btn btn-primary">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          新建用户
+        </button>
+        <button id="btn-logout" class="btn btn-outline hidden">登出</button>
+      </div>
+    </header>
 
-    <!-- modals for same-page windows -->
+    <main>
+      <section class="content-card">
+        <div class="card-header">
+          <h2>用户列表</h2>
+          <span class="hint">拖拽行可调整排序</span>
+        </div>
+        <div class="table-responsive">
+          <table id="user-table" class="modern-table">
+            <thead>
+              <tr>
+                <th width="50%">用户名 / 聚合链接</th>
+                <th width="50%" style="text-align: right;">操作</th>
+              </tr>
+            </thead>
+            <tbody id="user-list">
+              <!-- JS 渲染内容 -->
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer>
+      <p>Powered by <a href="https://github.com/vansour/sub" target="_blank">Sub</a></p>
+    </footer>
+
+    <!-- 遮罩层 -->
     <div id="modal-overlay" class="hidden"></div>
 
-    <!-- Login Modal -->
+    <!-- 登录弹窗 -->
     <div id="modal-login" class="modal hidden">
-      <div class="modal-body">
+      <div class="modal-header">
         <h3>管理员登录</h3>
+      </div>
+      <div class="modal-body">
         <form id="login-form">
-          <label>用户名</label>
-          <input id="login-username" name="username" required />
-          <label style="margin-top:8px">密码</label>
-          <input id="login-password" name="password" type="password" required />
-          <div class="modal-actions" style="margin-top:16px">
-            <button type="submit" class="accent-btn">登录</button>
+          <div class="form-group">
+            <label for="login-username">用户名</label>
+            <input id="login-username" name="username" type="text" required placeholder="请输入管理员账号"
+              autocomplete="username" />
           </div>
-          <div id="login-status" class="muted" style="color:red;margin-top:8px"></div>
+          <div class="form-group">
+            <label for="login-password">密码</label>
+            <input id="login-password" name="password" type="password" required placeholder="请输入密码"
+              autocomplete="current-password" />
+          </div>
+          <div id="login-status" class="form-status error"></div>
+          <div class="modal-footer">
+            <button type="submit" class="btn btn-primary btn-block">登录系统</button>
+          </div>
         </form>
       </div>
     </div>
 
-    <!-- combined add/edit modal: when adding, username editable; when editing, username locked -->
+    <!-- 添加/编辑用户弹窗 -->
     <div id="modal-form" class="modal hidden">
+      <div class="modal-header">
+        <h3 id="modal-form-title">用户配置</h3>
+        <button id="modal-form-cancel-x" class="btn-icon-close" onclick="hideModal('modal-form')">×</button>
+      </div>
       <div class="modal-body">
-        <h3 id="modal-form-title">编辑 / 添加 用户</h3>
-        <label>用户名</label>
-        <input id="modal-form-username" />
-
-        <label style="margin-top:8px">链接（每行一个）</label>
-        <textarea id="modal-form-links" rows="10" placeholder="https://example.com"></textarea>
-
-        <div class="modal-actions">
-          <button id="modal-form-save" class="accent-btn">保存</button>
-          <button id="modal-form-copy" class="btn-small">复制链接</button>
-          <button id="modal-form-cancel" class="btn-small">取消</button>
+        <div class="form-group">
+          <label for="modal-form-username">用户名 <span class="required">*</span></label>
+          <input id="modal-form-username" type="text" placeholder="例如: alice" autocomplete="off" />
+          <p class="form-hint">将作为 URL 路径的一部分 (e.g. /alice)</p>
         </div>
-        <div id="modal-form-status" class="muted"></div>
+
+        <div class="form-group">
+          <label for="modal-form-links">订阅链接源 <span class="required">*</span></label>
+          <textarea id="modal-form-links" rows="8"
+            placeholder="https://example.com/feed1&#10;https://example.com/feed2"></textarea>
+          <p class="form-hint">每行输入一个完整的 URL 地址</p>
+        </div>
+
+        <div id="modal-form-status" class="form-status"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="modal-form-cancel" class="btn btn-text">取消</button>
+        <div class="footer-right">
+          <button id="modal-form-copy" class="btn btn-outline">复制聚合链接</button>
+          <button id="modal-form-save" class="btn btn-primary">保存更改</button>
+        </div>
       </div>
     </div>
 
-    <div id="modal-delete" class="modal hidden">
+    <!-- 删除确认弹窗 -->
+    <div id="modal-delete" class="modal hidden modal-sm">
+      <div class="modal-header">
+        <h3>确认删除</h3>
+      </div>
       <div class="modal-body">
-        <h3 id="modal-delete-title">删除用户</h3>
-        <div id="modal-delete-message" class="muted"></div>
-        <div class="modal-actions"><button id="modal-delete-confirm" class="accent-btn">确认删除</button><button
-            id="modal-delete-cancel" class="btn-small">取消</button></div>
-        <div id="modal-delete-status" class="muted"></div>
+        <div class="warning-icon">
+          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
+            <line x1="12" y1="9" x2="12" y2="13"></line>
+            <line x1="12" y1="17" x2="12.01" y2="17"></line>
+          </svg>
+        </div>
+        <p id="modal-delete-message">您确定要删除此用户吗？此操作无法撤销。</p>
+        <div id="modal-delete-status" class="form-status error"></div>
+      </div>
+      <div class="modal-footer centered">
+        <button id="modal-delete-cancel" class="btn btn-text">取消</button>
+        <button id="modal-delete-confirm" class="btn btn-danger">确认删除</button>
       </div>
     </div>
-  </main>
 
+  </div>
   <script src="/static/script.js"></script>
 </body>
 
