@@ -4,6 +4,7 @@ use actix_web::dev::{ServiceRequest, ServiceResponse};
 use actix_web::http::header::{HeaderName, HeaderValue, USER_AGENT};
 use actix_web::middleware::Next;
 use std::env;
+use std::sync::Once;
 use std::time::Instant;
 use tracing::{error, info, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
@@ -12,38 +13,44 @@ use uuid::Uuid;
 /// Initialize logging for the application.
 ///
 /// Supports `RUST_LOG` for filtering and `LOG_JSON` for formatting.
+/// Uses `std::sync::Once` to ensure it is initialized only once, preventing panics in tests.
 pub fn init_logging() {
-    // 1. Route logs from `log` crate (used by dependencies like actix-web) to `tracing`
-    let _ = tracing_log::LogTracer::init();
+    static INIT: Once = Once::new();
 
-    // 2. Parse environment variables with better defaults
-    // Default to info, but keep our app (sub) at debug if needed
-    let filter = env::var("RUST_LOG").unwrap_or_else(|_| "info,sub=debug".into());
+    INIT.call_once(|| {
+        // 1. Route logs from `log` crate (used by dependencies like actix-web) to `tracing`
+        let _ = tracing_log::LogTracer::init();
 
-    // Robust boolean parsing for LOG_JSON
-    let use_json = env::var("LOG_JSON")
-        .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
-        .unwrap_or(false);
+        // 2. Parse environment variables with better defaults
+        // Default to info, but keep our app (sub) at debug if needed
+        let filter = env::var("RUST_LOG").unwrap_or_else(|_| "info,sub=debug".into());
 
-    let subscriber_builder = tracing_subscriber::fmt()
-        .with_env_filter(filter)
-        // We will log the event manually at the end of the request, so disable auto span events
-        .with_span_events(FmtSpan::NONE)
-        .with_target(false) // Hide the verbose module path (e.g. "sub::log")
-        .with_file(true) // Include file name for easier debugging
-        .with_line_number(true);
+        // Robust boolean parsing for LOG_JSON
+        let use_json = env::var("LOG_JSON")
+            .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+            .unwrap_or(false);
 
-    // 3. Initialize subscriber based on format
-    if use_json {
-        subscriber_builder
-            .json()
-            .flatten_event(true) // Flatten fields into the root JSON object for easier parsing
-            .init();
-    } else {
-        subscriber_builder
-            .compact() // Compact format is cleaner for local development
-            .init();
-    }
+        let subscriber_builder = tracing_subscriber::fmt()
+            .with_env_filter(filter)
+            // We will log the event manually at the end of the request, so disable auto span events
+            .with_span_events(FmtSpan::NONE)
+            .with_target(false) // Hide the verbose module path (e.g. "sub::log")
+            .with_file(true) // Include file name for easier debugging
+            .with_line_number(true);
+
+        // 3. Initialize subscriber based on format
+        // We use try_init() instead of init() to ignore errors if a subscriber is already set
+        if use_json {
+            let _ = subscriber_builder
+                .json()
+                .flatten_event(true) // Flatten fields into the root JSON object for easier parsing
+                .try_init();
+        } else {
+            let _ = subscriber_builder
+                .compact() // Compact format is cleaner for local development
+                .try_init();
+        }
+    });
 }
 
 /// Middleware: traces HTTP requests with structured logging.
@@ -145,9 +152,10 @@ mod tests {
     #[test]
     fn test_init_logging() {
         // Just ensure it doesn't panic on initialization
-        // Note: Running this in parallel with other tests might fail if tracing is already set globally
         let _ = std::panic::catch_unwind(|| {
             init_logging();
         });
+        // Calling it a second time should be fine now due to Once
+        init_logging();
     }
 }
