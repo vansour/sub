@@ -17,8 +17,10 @@ serde_json = "1.0.145"
 tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros"] }
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"] }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli", "deflate", "stream"] }
-html-escape = "0.2.13"
-regex = "1.12.2"
+# 移除 regex 和 html-escape，引入更强大的 scraper
+scraper = "0.22.0"
+# 添加 ego-tree 以便在 main.rs 中使用 ego_tree::NodeId
+ego-tree = "0.10.0" 
 url = "2.5.7"
 futures = "0.3.31"
 tracing = "0.1"

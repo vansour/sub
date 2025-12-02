@@ -13,8 +13,7 @@ use argon2::{
     password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
 };
 use futures::stream::StreamExt;
-use html_escape::decode_html_entities;
-use regex::Regex;
+use scraper::{Html, Node};
 use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
 use std::path::Path;
@@ -507,33 +506,114 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
         .body(full_text)
 }
 
+// 使用 Scraper 库来遍历 DOM 树，提取文本，并处理块级元素的换行
 fn html_to_text(input: &str) -> String {
-    let re_script = Regex::new(r"(?is)<(script|style)[^>]*>.*?</(script|style)>").unwrap();
-    let without_scripts = re_script.replace_all(input, "");
+    let document = Html::parse_document(input);
+    let mut buffer = String::new();
+    // FIX: 获取 root 的 ID
+    walk_node(document.tree.root().id(), &document, &mut buffer);
+    // 移除首尾空白，但保留内部换行结构
+    buffer.trim().to_string()
+}
 
-    let pre_token = "___PRE_NL___";
-    let re_pre = Regex::new(r"(?is)<pre[^>]*>(?s)(.*?)</pre>").unwrap();
-    let with_pre = re_pre.replace_all(&without_scripts, |caps: &regex::Captures| {
-        let inner = &caps[1];
-        let encoded = inner.replace("\r\n", "\n").replace("\n", pre_token);
-        format!("\n\n{}\n\n", encoded)
-    });
+// 递归遍历节点
+fn walk_node(node_id: ego_tree::NodeId, doc: &Html, buffer: &mut String) {
+    let node = doc.tree.get(node_id).unwrap();
 
-    let re_br = Regex::new(r"(?i)<br\s*/?>").unwrap();
-    let with_br = re_br.replace_all(&with_pre, "\n");
+    if let Node::Element(element) = node.value() {
+        let tag = element.name();
 
-    let re_block_close = Regex::new(r"(?i)</(p|div|li|h[1-6]|tr|section|header|footer|article|blockquote|table|tbody|thead|ul|ol)>\s*").unwrap();
-    let with_blocks = re_block_close.replace_all(&with_br, "\n\n");
+        // 1. 跳过不需要的标签
+        if tag == "script" || tag == "style" || tag == "head" {
+            return;
+        }
 
-    let re_tags = Regex::new(r"(?s)<[^>]+>").unwrap();
-    let stripped = re_tags.replace_all(&with_blocks, "");
+        // 2. 处理块级元素前置换行
+        if is_block_element(tag) {
+            ensure_newlines(buffer, 2);
+        } else if tag == "br" {
+            buffer.push('\n');
+        }
+    }
 
-    let collapsed = stripped;
-    let re_multi_nl = Regex::new(r"\n{3,}").unwrap();
-    let collapsed_nl = re_multi_nl.replace_all(&collapsed, "\n\n");
-    let restored = collapsed_nl.replace(pre_token, "\n");
+    // 3. 处理文本节点
+    if let Node::Text(text) = node.value() {
+        // Scraper 默认已经解码了 HTML 实体
+        // 我们简单地将连续的空白字符折叠成一个空格（类似浏览器渲染），
+        // 但如果是在 pre 标签内则应保留（这里简化处理，不做复杂的 CSS 样式判断）
+        let s = text.trim();
+        if !s.is_empty() {
+            if buffer.ends_with(|c: char| !c.is_whitespace()) {
+                buffer.push(' ');
+            }
+            buffer.push_str(s);
+        }
+    }
 
-    decode_html_entities(&restored).to_string()
+    // 4. 递归子节点
+    // FIX: 这里的 child 是 NodeRef，需要调用 .id() 获取 NodeId
+    for child in node.children() {
+        walk_node(child.id(), doc, buffer);
+    }
+
+    // 5. 处理块级元素后置换行（闭合标签效果）
+    if let Node::Element(element) = node.value() {
+        if is_block_element(element.name()) {
+            ensure_newlines(buffer, 2);
+        }
+    }
+}
+
+// 辅助函数：确保缓冲区末尾有至少 n 个换行符
+fn ensure_newlines(buffer: &mut String, n: usize) {
+    if buffer.is_empty() {
+        return;
+    }
+    let existing_newlines = buffer.chars().rev().take_while(|c| *c == '\n').count();
+    for _ in existing_newlines..n {
+        buffer.push('\n');
+    }
+}
+
+fn is_block_element(tag: &str) -> bool {
+    matches!(
+        tag,
+        "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "canvas"
+            | "dd"
+            | "div"
+            | "dl"
+            | "dt"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "form"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "header"
+            | "hr"
+            | "li"
+            | "main"
+            | "nav"
+            | "noscript"
+            | "ol"
+            | "p"
+            | "pre"
+            | "section"
+            | "table"
+            | "tfoot"
+            | "ul"
+            | "video"
+            | "tr" // 虽然 tr 不是顶级块，但在文本提取中常需要换行
+    )
 }
 
 #[get("/healthz")]
