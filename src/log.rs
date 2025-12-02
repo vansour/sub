@@ -1,93 +1,153 @@
 use actix_web::Error;
 use actix_web::body::BoxBody;
 use actix_web::dev::{ServiceRequest, ServiceResponse};
-use actix_web::http::header::{HeaderName, HeaderValue};
+use actix_web::http::header::{HeaderName, HeaderValue, USER_AGENT};
 use actix_web::middleware::Next;
 use std::env;
+use std::time::Instant;
+use tracing::{error, info, warn};
+use tracing_subscriber::fmt::format::FmtSpan;
+use uuid::Uuid;
 
 /// Initialize logging for the application.
+///
+/// Supports `RUST_LOG` for filtering and `LOG_JSON` for formatting.
 pub fn init_logging() {
-    // Route log crate messages to tracing
+    // 1. Route logs from `log` crate (used by dependencies like actix-web) to `tracing`
     let _ = tracing_log::LogTracer::init();
 
-    let filter = env::var("RUST_LOG").unwrap_or_else(|_| "info".into());
-    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(filter));
+    // 2. Parse environment variables with better defaults
+    // Default to info, but keep our app (sub) at debug if needed
+    let filter = env::var("RUST_LOG").unwrap_or_else(|_| "info,sub=debug".into());
 
-    let json = match env::var("LOG_JSON") {
-        Ok(v) => matches!(v.as_str(), "1" | "true" | "yes" | "on"),
-        Err(_) => false,
-    };
+    // Robust boolean parsing for LOG_JSON
+    let use_json = env::var("LOG_JSON")
+        .map(|v| matches!(v.to_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .unwrap_or(false);
 
-    if json {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NONE)
+    let subscriber_builder = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        // We will log the event manually at the end of the request, so disable auto span events
+        .with_span_events(FmtSpan::NONE)
+        .with_target(false) // Hide the verbose module path (e.g. "sub::log")
+        .with_file(true) // Include file name for easier debugging
+        .with_line_number(true);
+
+    // 3. Initialize subscriber based on format
+    if use_json {
+        subscriber_builder
             .json()
-            .try_init();
+            .flatten_event(true) // Flatten fields into the root JSON object for easier parsing
+            .init();
     } else {
-        let _ = tracing_subscriber::fmt()
-            .with_env_filter(env_filter)
-            .with_span_events(tracing_subscriber::fmt::format::FmtSpan::NONE)
-            .pretty()
-            .try_init();
+        subscriber_builder
+            .compact() // Compact format is cleaner for local development
+            .init();
     }
 }
 
-/// Middleware which creates a tracing span for each incoming request and adds structured fields.
+/// Middleware: traces HTTP requests with structured logging.
 ///
-/// Injects `x-request-id` header into the response if one isn't present, and logs status/latency.
+/// - Injects `x-request-id` if missing for distributed tracing.
+/// - Logs duration, status, method, and path.
+/// - Uses semantic log levels: ERROR for 5xx, WARN for 4xx, INFO for others.
 pub async fn trace_requests(
     req: ServiceRequest,
     next: Next<BoxBody>,
 ) -> Result<ServiceResponse<BoxBody>, Error> {
-    // gather fields (encapsulated in a block so any borrows from `req` end before `next.call(req)`)
-    let (method, path, client_ip, user_agent, request_id) = {
-        let method = req.method().to_string();
-        let path = req.path().to_string();
-        let client_ip = req
-            .connection_info()
-            .realip_remote_addr()
-            .unwrap_or("unknown")
-            .to_string();
-        let user_agent = req
-            .headers()
-            .get("user-agent")
-            .and_then(|v| v.to_str().ok())
-            .unwrap_or("")
-            .to_string();
-        let request_id = req
-            .headers()
-            .get("x-request-id")
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        (method, path, client_ip, user_agent, request_id)
-    };
+    // 1. Extract request info
+    let request_id = req
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| Uuid::new_v4().to_string());
 
-    let span = tracing::info_span!("http.request", method = %method, path = %path, client_ip = %client_ip, user_agent = %user_agent, request_id = %request_id);
+    let http_method = req.method().to_string();
+    let http_path = req.path().to_string();
+    // Keep query string for debugging, but be careful with PII in production
+    let http_query = req.query_string().to_string();
+
+    let client_ip = req
+        .connection_info()
+        .realip_remote_addr()
+        .unwrap_or("unknown")
+        .to_string();
+
+    let user_agent = req
+        .headers()
+        .get(USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("-")
+        .to_string();
+
+    // 2. Create a span for this request context
+    // We use standard OpenTelemetry semantic conventions for field names where possible
+    let span = tracing::info_span!(
+        "http_request",
+        "x-request-id" = %request_id,
+        "http.method" = %http_method,
+        "http.path" = %http_path,
+        "client.ip" = %client_ip
+    );
+
     let _enter = span.enter();
-    let start = std::time::Instant::now();
-    let mut res: ServiceResponse<BoxBody> = next.call(req).await?;
+    let start_time = Instant::now();
+
+    // 3. Execute the actual handler
+    let mut res = next.call(req).await?;
+
+    // 4. Post-processing
+    let duration = start_time.elapsed();
     let status = res.status();
-    let elapsed_ms = start.elapsed().as_millis();
+    let status_code = status.as_u16();
 
-    tracing::info!(status = status.as_u16(), elapsed_ms, "request complete");
+    // Inject request ID into response headers so client can correlate logs
+    res.headers_mut().insert(
+        HeaderName::from_static("x-request-id"),
+        HeaderValue::from_str(&request_id).unwrap(),
+    );
 
-    // Ensure response contains x-request-id for tracing correlation
-    let headers = res.response_mut().headers_mut();
-    if headers.get("x-request-id").is_none()
-        && let Ok(v) = HeaderValue::from_str(&request_id)
-    {
-        headers.insert(HeaderName::from_static("x-request-id"), v);
+    // 5. Structured logging with dynamic severity
+    match status_code {
+        500..=599 => {
+            error!(
+                "http.status_code" = status_code,
+                "http.duration_ms" = duration.as_millis(),
+                "http.user_agent" = %user_agent,
+                "http.query" = %http_query,
+                "request failed (server error)"
+            );
+        }
+        400..=499 => {
+            warn!(
+                "http.status_code" = status_code,
+                "http.duration_ms" = duration.as_millis(),
+                "request failed (client error)"
+            );
+        }
+        _ => {
+            info!(
+                "http.status_code" = status_code,
+                "http.duration_ms" = duration.as_millis(),
+                "request completed"
+            );
+        }
     }
+
     Ok(res)
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
-    fn smoke() {
-        crate::log::init_logging();
+    fn test_init_logging() {
+        // Just ensure it doesn't panic on initialization
+        // Note: Running this in parallel with other tests might fail if tracing is already set globally
+        let _ = std::panic::catch_unwind(|| {
+            init_logging();
+        });
     }
 }

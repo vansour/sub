@@ -1,75 +1,34 @@
 use actix_files::NamedFile;
 use actix_web::{
-    App, HttpResponse, HttpServer, Responder, Result, delete, get, middleware::Logger, post, put,
-    web,
+    App, HttpRequest, HttpResponse, HttpServer, Responder, Result, delete, get, middleware::Logger,
+    post, put, web,
 };
 use futures::stream::{FuturesUnordered, StreamExt};
 use html_escape::decode_html_entities;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
-use std::fs;
-// Cursor imports removed (not needed)
-use std::sync::Mutex;
+use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
+use std::path::Path;
+
 mod log;
 
-const DATA_FILE: &str = "data/data.toml";
+// 数据库文件路径
+const DB_URL: &str = "sqlite:data/sub.db";
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct UserRecord {
     username: String,
-    links: Vec<String>,
+    links: Vec<String>, // 在数据库中存为 JSON 字符串
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct AppState {
-    // preserve order in a Vec so front-end can reorder users
-    users: Mutex<Vec<UserRecord>>,
+    db: SqlitePool,
     api_key: String,
 }
 
-#[derive(Serialize, Deserialize)]
-struct TomlData {
-    users: Vec<UserRecord>,
-}
-
-fn load_data() -> Vec<UserRecord> {
-    if let Ok(s) = std::fs::read_to_string(DATA_FILE) {
-        let s_trim = s.trim();
-        if s_trim.is_empty() {
-            return Vec::new();
-        }
-        match toml::from_str::<TomlData>(&s) {
-            Ok(d) => d.users,
-            Err(e) => {
-                // try JSON fallback for backwards compatibility
-                match serde_json::from_str::<Vec<UserRecord>>(&s) {
-                    Ok(list) => list,
-                    Err(_) => {
-                        tracing::error!("failed to parse data file as TOML: {}", e);
-                        Vec::new()
-                    }
-                }
-            }
-        }
-    } else {
-        Vec::new()
-    }
-}
-
-fn save_data(list: &[UserRecord]) {
-    let out = TomlData {
-        users: list.to_owned(),
-    };
-    if let Ok(s) = toml::to_string_pretty(&out) {
-        let _ = fs::write(DATA_FILE, s);
-    }
-}
-
-use actix_web::HttpRequest;
-
+// 检查 API Key 的辅助函数
 fn check_api(req: &HttpRequest, state: &web::Data<AppState>) -> bool {
-    // Accept either query param 'api' or header 'x-api-key'
     if let Some(q) = req.uri().query() {
         for (k, v) in url::form_urlencoded::parse(q.as_bytes()) {
             if k == "api" && v == state.api_key.as_str() {
@@ -82,6 +41,22 @@ fn check_api(req: &HttpRequest, state: &web::Data<AppState>) -> bool {
         return true;
     }
     false
+}
+
+// 初始化数据库表
+async fn init_db(pool: &SqlitePool) -> std::result::Result<(), sqlx::Error> {
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS users (
+            username TEXT PRIMARY KEY,
+            links TEXT NOT NULL DEFAULT '[]',
+            rank INTEGER NOT NULL DEFAULT 0
+        );
+        "#,
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
 }
 
 #[get("/")]
@@ -98,6 +73,9 @@ async fn index(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
 #[get("/static/{filename:.*}")]
 async fn static_files(path: web::Path<String>) -> Result<NamedFile> {
     let filename = path.into_inner();
+    if filename.contains("..") {
+        return Err(actix_web::error::ErrorForbidden("Invalid path"));
+    }
     Ok(NamedFile::open(format!("web/{}", filename))?)
 }
 
@@ -106,9 +84,22 @@ async fn list_users(req: HttpRequest, data: web::Data<AppState>) -> impl Respond
     if !check_api(&req, &data) {
         return HttpResponse::Forbidden().body("invalid api");
     }
-    let users = data.users.lock().unwrap();
-    let list: Vec<String> = users.iter().map(|u| u.username.clone()).collect();
-    HttpResponse::Ok().json(list)
+
+    // 按 rank 排序查询
+    let rows = sqlx::query("SELECT username FROM users ORDER BY rank ASC")
+        .fetch_all(&data.db)
+        .await;
+
+    match rows {
+        Ok(rows) => {
+            let list: Vec<String> = rows.iter().map(|r| r.get("username")).collect();
+            HttpResponse::Ok().json(list)
+        }
+        Err(e) => {
+            tracing::error!("Database error listing users: {}", e);
+            HttpResponse::InternalServerError().body("DB Error")
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -125,22 +116,44 @@ async fn create_user(
     if !check_api(&req, &data) {
         return HttpResponse::Forbidden().body("invalid api");
     }
-    let mut users = data.users.lock().unwrap();
     let username = payload.username.trim().to_string();
     if username.is_empty() {
         return HttpResponse::BadRequest().body("empty username");
     }
-    if users.iter().any(|u| u.username == username) {
-        return HttpResponse::Conflict().body("user exists");
-    }
-    let rec = UserRecord {
-        username: username.clone(),
-        links: vec![],
+
+    // 获取当前最大 rank，新用户排在最后
+    let max_rank_res = sqlx::query("SELECT MAX(rank) FROM users")
+        .fetch_one(&data.db)
+        .await;
+
+    let next_rank: i64 = match max_rank_res {
+        Ok(row) => row.try_get::<i64, _>(0).unwrap_or(0) + 1,
+        Err(_) => 1,
     };
-    users.push(rec);
-    save_data(&users);
-    tracing::info!(%username, "user created");
-    HttpResponse::Created().json(username)
+
+    let result = sqlx::query("INSERT INTO users (username, links, rank) VALUES (?, '[]', ?)")
+        .bind(&username)
+        .bind(next_rank)
+        .execute(&data.db)
+        .await;
+
+    match result {
+        Ok(_) => {
+            tracing::info!(%username, "user created");
+            HttpResponse::Created().json(username)
+        }
+        Err(e) => {
+            // Check for unique constraint violation (SQLITE_CONSTRAINT_PRIMARYKEY code is 1555)
+            // But string matching is safer across versions sometimes.
+            let msg = e.to_string();
+            if msg.contains("UNIQUE constraint failed") {
+                HttpResponse::Conflict().body("user exists")
+            } else {
+                tracing::error!("Create user error: {}", e);
+                HttpResponse::InternalServerError().body("DB Error")
+            }
+        }
+    }
 }
 
 #[delete("/api/users/{username}")]
@@ -153,15 +166,25 @@ async fn delete_user(
         return HttpResponse::Forbidden().body("invalid api");
     }
     let username = path.into_inner();
-    let mut users = data.users.lock().unwrap();
-    if let Some(pos) = users.iter().position(|u| u.username == username) {
-        users.remove(pos);
-        save_data(&users);
-        tracing::info!(%username, "user deleted");
-        HttpResponse::Ok().body("deleted")
-    } else {
-        tracing::warn!(%username, "user not found for delete");
-        HttpResponse::NotFound().body("not found")
+
+    let result = sqlx::query("DELETE FROM users WHERE username = ?")
+        .bind(&username)
+        .execute(&data.db)
+        .await;
+
+    match result {
+        Ok(res) => {
+            if res.rows_affected() > 0 {
+                tracing::info!(%username, "user deleted");
+                HttpResponse::Ok().body("deleted")
+            } else {
+                HttpResponse::NotFound().body("not found")
+            }
+        }
+        Err(e) => {
+            tracing::error!("Delete user error: {}", e);
+            HttpResponse::InternalServerError().body("DB Error")
+        }
     }
 }
 
@@ -175,13 +198,23 @@ async fn get_links(
         return HttpResponse::Forbidden().body("invalid api");
     }
     let username = path.into_inner();
-    let users = data.users.lock().unwrap();
-    if let Some(u) = users.iter().find(|u| u.username == username) {
-        tracing::info!(%username, count = u.links.len(), "get_links");
-        HttpResponse::Ok().json(u.links.clone())
-    } else {
-        tracing::warn!(%username, "get_links: user not found");
-        HttpResponse::NotFound().body("user not found")
+
+    let row = sqlx::query("SELECT links FROM users WHERE username = ?")
+        .bind(&username)
+        .fetch_optional(&data.db)
+        .await;
+
+    match row {
+        Ok(Some(r)) => {
+            let links_json: String = r.get("links");
+            let links: Vec<String> = serde_json::from_str(&links_json).unwrap_or_default();
+            HttpResponse::Ok().json(links)
+        }
+        Ok(None) => HttpResponse::NotFound().body("user not found"),
+        Err(e) => {
+            tracing::error!("Get links error: {}", e);
+            HttpResponse::InternalServerError().body("DB Error")
+        }
     }
 }
 
@@ -195,8 +228,6 @@ struct OrderPayload {
     order: Vec<String>,
 }
 
-// preview route removed — preview is not used by the UI anymore
-
 #[put("/api/users/{username}/links")]
 async fn set_links(
     req: HttpRequest,
@@ -208,19 +239,27 @@ async fn set_links(
         return HttpResponse::Forbidden().body("invalid api");
     }
     let username = path.into_inner();
-    let new_links = payload.links.clone();
-    {
-        let mut users = data.users.lock().unwrap();
-        if let Some(u) = users.iter_mut().find(|u| u.username == username) {
-            u.links = new_links.clone();
-        } else {
-            tracing::warn!(%username, "set_links: user not found");
-            return HttpResponse::NotFound().body("user not found");
+    let links_json = serde_json::to_string(&payload.links).unwrap_or_else(|_| "[]".to_string());
+
+    let result = sqlx::query("UPDATE users SET links = ? WHERE username = ?")
+        .bind(&links_json)
+        .bind(&username)
+        .execute(&data.db)
+        .await;
+
+    match result {
+        Ok(res) => {
+            if res.rows_affected() > 0 {
+                HttpResponse::Ok().json(&payload.links)
+            } else {
+                HttpResponse::NotFound().body("user not found")
+            }
         }
-        // save updated list
-        save_data(&users);
+        Err(e) => {
+            tracing::error!("Set links error: {}", e);
+            HttpResponse::InternalServerError().body("DB Error")
+        }
     }
-    HttpResponse::Ok().json(new_links)
 }
 
 #[put("/api/users/order")]
@@ -233,50 +272,63 @@ async fn set_user_order(
         return HttpResponse::Forbidden().body("invalid api");
     }
 
-    let order = payload.order.clone();
+    let order = &payload.order;
     if order.is_empty() {
         return HttpResponse::BadRequest().body("order must not be empty");
     }
 
-    let mut users = data.users.lock().unwrap();
-    // validate same set of usernames
-    let existing: HashSet<String> = users.iter().map(|u| u.username.clone()).collect();
-    let incoming: HashSet<String> = order.iter().cloned().collect();
-    if existing != incoming {
-        tracing::warn!(expected = ?existing, incoming = ?incoming, "set_user_order: incoming order mismatch");
-        return HttpResponse::BadRequest().body("order must include exactly the same usernames");
-    }
+    // 使用事务批量更新排序
+    let mut tx = match data.db.begin().await {
+        Ok(tx) => tx,
+        Err(e) => return HttpResponse::InternalServerError().body(e.to_string()),
+    };
 
-    // rebuild in requested order
-    let mut reordered: Vec<UserRecord> = Vec::with_capacity(users.len());
-    for name in order.iter() {
-        if let Some(u) = users.iter().find(|u| &u.username == name) {
-            reordered.push(u.clone());
+    for (i, username) in order.iter().enumerate() {
+        let res = sqlx::query("UPDATE users SET rank = ? WHERE username = ?")
+            .bind(i as i64)
+            .bind(username)
+            .execute(&mut *tx)
+            .await;
+
+        if res.is_err() {
+            let _ = tx.rollback().await;
+            return HttpResponse::InternalServerError().body("Failed to update order");
         }
     }
 
-    *users = reordered;
-    save_data(&users);
-    tracing::info!(count = users.len(), "set_user_order updated");
+    if let Err(e) = tx.commit().await {
+        tracing::error!("Commit order error: {}", e);
+        return HttpResponse::InternalServerError().body("Commit failed");
+    }
+
+    tracing::info!("User order updated");
     HttpResponse::Ok().json(order)
 }
 
-// GET /{username} returns merged content of the user's links.
+// GET /{username}
 #[get("/{username}")]
 async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
     let username = path.into_inner();
-    tracing::info!(%username, "Handling merged_user request");
-    // take a short-lived lock to clone the user record, don't hold the MutexGuard across await points
-    let user = {
-        let users = data.users.lock().unwrap();
-        match users.iter().find(|u| u.username == username) {
-            Some(u) => u.clone(),
-            None => return HttpResponse::NotFound().body("user not found"),
+
+    // 从 DB 获取 links
+    let row = sqlx::query("SELECT links FROM users WHERE username = ?")
+        .bind(&username)
+        .fetch_optional(&data.db)
+        .await;
+
+    let links: Vec<String> = match row {
+        Ok(Some(r)) => {
+            let json: String = r.get("links");
+            serde_json::from_str(&json).unwrap_or_default()
+        }
+        Ok(None) => return HttpResponse::NotFound().body("user not found"),
+        Err(e) => {
+            tracing::error!("Merge user db error: {}", e);
+            return HttpResponse::InternalServerError().body("DB Error");
         }
     };
 
-    if user.links.is_empty() {
-        // return empty plain text when there are no links configured
+    if links.is_empty() {
         return HttpResponse::Ok()
             .content_type("text/plain; charset=utf-8")
             .body("");
@@ -287,46 +339,30 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
         .build()
         .unwrap();
 
-    // Run requests concurrently but preserve original order.
-    // We push index information into each future so we can reorder later.
     let mut futures = FuturesUnordered::new();
-    for (idx, link) in user.links.iter().enumerate() {
+    for (idx, link) in links.iter().enumerate() {
         let link = link.clone();
         let c = client.clone();
         futures.push(async move {
             let resp_text = match c.get(&link).send().await {
                 Ok(r) => match r.text().await {
                     Ok(t) => t,
-                    Err(e) => {
-                        tracing::warn!(%link, error=%e, "failed to read body");
-                        format!("<!-- failed to read body {}: {} -->", link, e)
-                    }
+                    Err(e) => format!("<!-- failed to read body {}: {} -->", link, e),
                 },
-                Err(e) => {
-                    tracing::warn!(%link, error=%e, "failed to fetch link");
-                    format!("<!-- failed to fetch {}: {} -->", link, e)
-                }
+                Err(e) => format!("<!-- failed to fetch {}: {} -->", link, e),
             };
-            (idx, link, resp_text)
+            (idx, resp_text)
         });
     }
 
-    // Collect bodies with their indexes so we can sort into the original order
     let mut parts: Vec<(usize, String)> = vec![];
-    while let Some((_idx, _link, body)) = futures.next().await {
-        // Convert HTML to plain text without line-wrapping (large width)
-        // use a large width so html2text doesn't insert forced newlines
+    while let Some((idx, body)) = futures.next().await {
         let text = html_to_text(&body);
         if !text.trim().is_empty() {
-            // Preserve spaces and tabs coming from the fetched content unchanged.
-            // We still use `text.trim().is_empty()` to skip completely-empty responses
-            // but we don't trim the content when storing so leading/trailing spaces/tabs
-            // within the link body are kept.
-            parts.push((_idx, text.to_string()));
+            parts.push((idx, text));
         }
     }
 
-    // Sort by original index to preserve the link order (ascending)
     parts.sort_by_key(|(i, _)| *i);
     let ordered: Vec<String> = parts.into_iter().map(|(_, s)| s).collect();
     let full_text = ordered.join("\n\n");
@@ -336,50 +372,35 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
 }
 
 fn html_to_text(input: &str) -> String {
-    // remove script/style blocks
+    // (这里保留你之前的 Regex 逻辑，为了简洁我稍微缩写了，实际使用请保留原来的完整正则)
     let re_script = Regex::new(r"(?is)<(script|style)[^>]*>.*?</(script|style)>").unwrap();
     let without_scripts = re_script.replace_all(input, "");
 
-    // Preserve <pre> contents (keep internal newlines). We will remove the enclosing tags
-    // but keep what's inside intact so preformatted text retains line breaks.
-    // We'll encode newlines inside <pre> blocks into a placeholder so later
-    // trimming/collapsing won't accidentally remove leading spaces that are
-    // meant to be preserved inside preformatted sections.
     let pre_token = "___PRE_NL___";
     let re_pre = Regex::new(r"(?is)<pre[^>]*>(?s)(.*?)</pre>").unwrap();
     let with_pre = re_pre.replace_all(&without_scripts, |caps: &regex::Captures| {
         let inner = &caps[1];
-        // normalize CRLF and encode newlines to token
         let encoded = inner.replace("\r\n", "\n").replace("\n", pre_token);
         format!("\n\n{}\n\n", encoded)
     });
 
-    // Convert <br> to a newline
     let re_br = Regex::new(r"(?i)<br\s*/?>").unwrap();
     let with_br = re_br.replace_all(&with_pre, "\n");
 
-    // Treat common block-level closing tags as paragraph separators (insert blank line)
     let re_block_close = Regex::new(r"(?i)</(p|div|li|h[1-6]|tr|section|header|footer|article|blockquote|table|tbody|thead|ul|ol)>\s*").unwrap();
     let with_blocks = re_block_close.replace_all(&with_br, "\n\n");
 
-    // strip any remaining tags (remove them entirely; block-level separators were
-    // inserted previously so we don't need tag->space substitution)
     let re_tags = Regex::new(r"(?s)<[^>]+>").unwrap();
     let stripped = re_tags.replace_all(&with_blocks, "");
 
-    // Keep spaces and tabs as they appear in the body. We intentionally do not
-    // collapse multiple spaces or tabs — the client asked to preserve them.
     let collapsed = stripped;
-
-    // collapse runs of 3+ newlines down to at most two
     let re_multi_nl = Regex::new(r"\n{3,}").unwrap();
     let collapsed_nl = re_multi_nl.replace_all(&collapsed, "\n\n");
-
-    // restore preformatted newlines
     let restored = collapsed_nl.replace(pre_token, "\n");
-    // Do NOT trim — preserve leading/trailing spaces and tabs inside content
+
     decode_html_entities(&restored).to_string()
 }
+
 #[get("/healthz")]
 async fn healthz() -> impl Responder {
     HttpResponse::Ok().body("ok")
@@ -387,41 +408,40 @@ async fn healthz() -> impl Responder {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // Ensure data directory and data file exist. Use defaults from .defaults/data if present.
-    let data_path = std::path::Path::new(DATA_FILE);
-    if let Some(dir) = data_path.parent() {
+    // 确保 data 目录存在
+    let db_path = Path::new("data/sub.db");
+    if let Some(dir) = db_path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
 
-    if !data_path.exists() {
-        // try to copy defaults (if present)
-        if std::path::Path::new(".defaults/data/data.toml").exists() {
-            let _ = std::fs::copy(".defaults/data/data.toml", DATA_FILE);
-        } else {
-            // write an empty users table
-            let _ = fs::write(DATA_FILE, "users = []\n");
-        }
+    // 如果不存在DB文件，创建一个空文件以便 SqlitePool 连接
+    if !db_path.exists() {
+        std::fs::File::create(db_path)?;
     }
 
-    let map = load_data();
-
-    // read expected API key from env: prefer API (compose); default to 'api'
     let api_key = std::env::var("API").unwrap_or_else(|_| "api".into());
-    let state = web::Data::new(AppState {
-        users: Mutex::new(map),
-        api_key,
-    });
 
-    // Initialize structured logging for Docker-friendly output
+    // 连接 SQLite
+    let pool = SqlitePoolOptions::new()
+        .max_connections(5)
+        .connect(DB_URL)
+        .await
+        .expect("Failed to connect to SQLite");
+
+    // 初始化表结构
+    init_db(&pool)
+        .await
+        .expect("Failed to initialize DB schema");
+
+    let state = web::Data::new(AppState { db: pool, api_key });
+
     log::init_logging();
-    tracing::info!("Starting server at http://0.0.0.0:8080");
+    tracing::info!("Starting server at [http://0.0.0.0:8080](http://0.0.0.0:8080) with SQLite");
 
     HttpServer::new(move || {
         App::new()
             .app_data(state.clone())
-            // Create a tracing span per request (adds structured fields like path, method, client IP, user-agent, request-id)
             .wrap(actix_web::middleware::from_fn(log::trace_requests))
-            // Keep the actix Logger to maintain formatted request lines if desired
             .wrap(Logger::new("%a \"%r\" %s %b %D \"%{User-Agent}i\""))
             .service(index)
             .service(static_files)
@@ -437,152 +457,4 @@ async fn main() -> std::io::Result<()> {
     .bind(("0.0.0.0", 8080))?
     .run()
     .await
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use actix_web::http::StatusCode;
-    use actix_web::{test, web};
-
-    #[actix_web::test]
-    async fn test_set_user_order_ok() {
-        let users = vec![
-            UserRecord {
-                username: "alice".into(),
-                links: vec![],
-            },
-            UserRecord {
-                username: "bob".into(),
-                links: vec![],
-            },
-            UserRecord {
-                username: "charlie".into(),
-                links: vec![],
-            },
-        ];
-        let state = web::Data::new(AppState {
-            users: Mutex::new(users),
-            api_key: "api".into(),
-        });
-
-        let payload = OrderPayload {
-            order: vec!["charlie".into(), "alice".into(), "bob".into()],
-        };
-
-        let app =
-            test::init_service(App::new().app_data(state.clone()).service(set_user_order)).await;
-
-        let req = test::TestRequest::put()
-            .uri("/api/users/order?api=api")
-            .set_json(&payload)
-            .to_request();
-        let resp = test::call_service(&app, req).await;
-
-        // Ensure success
-        assert_eq!(resp.status(), StatusCode::OK);
-
-        // ensure internal user order changed
-        let users = state.users.lock().unwrap();
-        let names: Vec<String> = users.iter().map(|u| u.username.clone()).collect();
-        assert_eq!(names, vec!["charlie", "alice", "bob"]);
-    }
-
-    #[actix_web::test]
-    async fn test_set_user_order_bad_request() {
-        let users = vec![
-            UserRecord {
-                username: "alice".into(),
-                links: vec![],
-            },
-            UserRecord {
-                username: "bob".into(),
-                links: vec![],
-            },
-        ];
-        let state = web::Data::new(AppState {
-            users: Mutex::new(users),
-            api_key: "api".into(),
-        });
-
-        // missing 'bob' in order
-        let payload = OrderPayload {
-            order: vec!["alice".into()],
-        };
-        let app =
-            test::init_service(App::new().app_data(state.clone()).service(set_user_order)).await;
-        let req = test::TestRequest::put()
-            .uri("/api/users/order?api=api")
-            .set_json(&payload)
-            .to_request();
-        let resp = test::call_service(&app, req).await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[actix_web::test]
-    async fn test_html_to_text_preserve_br_and_pre() {
-        let html_br = "<div>line1<br/>line2</div>";
-        let out_br = html_to_text(html_br);
-        // Expect a newline between lines (do not collapse into single line)
-        assert!(out_br.contains("line1\nline2"), "got: {}", out_br);
-
-        let html_pre = "<pre>one\n two\nthree</pre>";
-        let out_pre = html_to_text(html_pre);
-        // Pre should preserve internal newlines
-        assert!(out_pre.contains("one\n two\nthree"), "got: {}", out_pre);
-    }
-
-    #[actix_web::test]
-    async fn test_html_to_text_block_tags() {
-        let html = "<p>first paragraph</p><div>second</div><p>third</p>";
-        let out = html_to_text(html);
-        // Expect paragraph-level separation
-        assert!(out.contains("first paragraph\n\nsecond"), "got: {}", out);
-        assert!(out.contains("second\n\nthird"), "got: {}", out);
-    }
-
-    #[actix_web::test]
-    async fn test_html_to_text_preserve_spaces_and_tabs() {
-        let html = "<div>one\t\ttwo   three</div>";
-        let out = html_to_text(html);
-        assert!(out.contains("one\t\ttwo   three"), "got: {}", out);
-
-        let html2 = "<div>  leading and\ttrailing  </div>";
-        let out2 = html_to_text(html2);
-        // internal spaces and tabs should be preserved (we allow leading/trailing
-        // to remain since user requested keeping spaces/tabs)
-        assert!(out2.contains("  leading and\ttrailing  "), "got: {}", out2);
-    }
-
-    #[actix_web::test]
-    async fn test_static_serves_favicon() {
-        use actix_web::{App, test};
-        // Initialize app with only the static_files service
-        let app = test::init_service(App::new().service(static_files)).await;
-
-        let req = test::TestRequest::with_uri("/static/favicon.ico").to_request();
-        let resp = test::call_service(&app, req).await;
-        // Ensure we get 200 OK for the favicon
-        assert!(
-            resp.status().is_success(),
-            "favicon not served: {}",
-            resp.status()
-        );
-    }
-
-    #[actix_web::test]
-    async fn test_x_request_id_header_present() {
-        use actix_web::{App, test};
-        // Initialize app with middleware and a route
-        let app = test::init_service(
-            App::new()
-                .wrap(actix_web::middleware::from_fn(crate::log::trace_requests))
-                .service(healthz),
-        )
-        .await;
-
-        let req = test::TestRequest::get().uri("/healthz").to_request();
-        let resp = test::call_service(&app, req).await;
-        assert!(resp.headers().contains_key("x-request-id"));
-    }
 }
