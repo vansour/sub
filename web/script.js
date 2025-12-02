@@ -1,65 +1,96 @@
 const $ = sel => document.querySelector(sel);
-const $all = sel => Array.from(document.querySelectorAll(sel));
 
-// 移除 URL 参数 API_TOKEN，改用 Cookie 鉴权
-
+// 全局 API 包装器
 async function api(path, opts = {}) {
-  // 自动发送凭据 (cookies)
-  opts.credentials = 'include';
+  opts.credentials = 'include'; // 发送 Cookie
 
-  const res = await fetch(path, opts);
+  try {
+    const res = await fetch(path, opts);
 
-  // 如果未授权，弹出登录框
-  if (res.status === 401) {
-    showLoginModal();
+    // 401 未授权 -> 显示登录界面，隐藏主应用
+    if (res.status === 401) {
+      showLoginScreen();
+      return null;
+    }
+
+    const text = await res.text();
+    try { return JSON.parse(text); } catch (e) { return text; }
+  } catch (e) {
+    console.error("API Error:", e);
     return null;
   }
-
-  const text = await res.text();
-  try { return JSON.parse(text); } catch (e) { return text; }
 }
 
-function showLoginModal() {
-  $('#modal-overlay').classList.remove('hidden');
-  $('#modal-login').classList.remove('hidden');
+// --- 界面切换逻辑 ---
+
+function showLoginScreen() {
+  $('#login-screen').classList.remove('hidden');
+  $('#app-content').classList.add('hidden');
+  $('#modal-overlay').classList.add('hidden'); // 确保其他遮罩关闭
   $('#login-username').focus();
+}
+
+function showAppScreen() {
+  $('#login-screen').classList.add('hidden');
+  $('#app-content').classList.remove('hidden');
+  renderUsers();
+}
+
+// --- 认证逻辑 ---
+
+async function checkAuth() {
+  const res = await fetch('/api/auth/me');
+  if (res.ok) {
+    showAppScreen();
+  } else {
+    showLoginScreen();
+  }
 }
 
 async function doLogin(e) {
   e.preventDefault();
   const username = $('#login-username').value;
   const password = $('#login-password').value;
+  const btn = e.target.querySelector('button');
 
-  const res = await fetch('/api/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password })
-  });
+  // UI Loading state
+  const originalText = btn.innerText;
+  btn.innerText = '登录中...';
+  btn.disabled = true;
 
-  if (res.ok) {
-    hideModal('modal-login');
-    $('#btn-logout').classList.remove('hidden');
-    renderUsers();
-  } else {
-    $('#login-status').innerText = '登录失败：用户名或密码错误';
+  try {
+    const res = await fetch('/api/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username, password })
+    });
+
+    if (res.ok) {
+      $('#login-password').value = ''; // clear pass
+      $('#login-status').innerText = '';
+      showAppScreen();
+    } else {
+      $('#login-status').innerText = '登录失败：用户名或密码错误';
+      // 晃动动画效果 (可选)
+      $('.login-card').animate([
+        { transform: 'translateX(0)' },
+        { transform: 'translateX(-5px)' },
+        { transform: 'translateX(5px)' },
+        { transform: 'translateX(0)' }
+      ], { duration: 300 });
+    }
+  } finally {
+    btn.innerText = originalText;
+    btn.disabled = false;
   }
 }
 
 async function doLogout() {
   await api('/api/auth/logout', { method: 'POST' });
-  window.location.reload();
+  showLoginScreen();
 }
 
-async function checkAuth() {
-  const res = await fetch('/api/auth/me');
-  if (res.ok) {
-    $('#btn-logout').classList.remove('hidden');
-    renderUsers();
-  } else {
-    showLoginModal();
-  }
-}
-
+// --- 拖拽排序 ---
 function getDragAfterElement(container, y) {
   const draggableElements = [...container.querySelectorAll('tr:not(.dragging)')];
   let closest = { offset: Number.NEGATIVE_INFINITY, element: null };
@@ -77,26 +108,20 @@ async function saveOrder() {
   const rows = Array.from(document.querySelectorAll('#user-list tr'));
   const order = rows.map(r => r.dataset.username).filter(Boolean);
   if (!order.length) return;
-  try {
-    const res = await api('/api/users/order', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
-    console.log('saved order', res);
-  } catch (e) {
-    console.warn('failed to save order', e);
-  }
+  await api('/api/users/order', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
 }
+
+// --- 核心渲染逻辑 ---
 
 async function renderUsers() {
   const list = await api('/api/users');
   const tbody = $('#user-list');
   tbody.innerHTML = '';
 
-  // 如果 list 为 null (401) 或非数组，不渲染
-  if (!Array.isArray(list)) {
-    return;
-  }
+  if (!Array.isArray(list)) { return; }
 
   if (list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="2" class="notice">没有用户 — 点击上方添加</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="2" style="text-align:center; padding: 2rem; color: #94a3b8;">暂无用户，请点击右上角添加</td></tr>';
     return;
   }
 
@@ -105,32 +130,67 @@ async function renderUsers() {
     tr.setAttribute('draggable', 'true');
     tr.dataset.username = u;
 
-    // 安全构建 DOM，防止 XSS
+    // 1. 用户名列
     const tdName = document.createElement('td');
-    const strong = document.createElement('strong');
-    strong.textContent = u;
-    tdName.appendChild(strong);
 
+    const nameDiv = document.createElement('div');
+    nameDiv.className = 'user-name-cell';
+    nameDiv.textContent = u;
+
+    const linkPreview = document.createElement('span');
+    linkPreview.className = 'user-link-preview';
+    const fullUrl = window.location.origin + '/' + encodeURIComponent(u);
+    linkPreview.textContent = fullUrl;
+
+    tdName.appendChild(nameDiv);
+    tdName.appendChild(linkPreview);
+
+    // 2. 操作列 (编辑 -> 复制 -> 删除)
     const tdActions = document.createElement('td');
-    tdActions.className = 'user-actions';
+    const actionGroup = document.createElement('div');
+    actionGroup.className = 'action-group';
 
+    // 编辑按钮
     const btnEdit = document.createElement('button');
-    btnEdit.className = 'btn-small edit';
-    btnEdit.textContent = '编辑';
+    btnEdit.className = 'btn btn-sm btn-outline';
+    btnEdit.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> 编辑`;
     btnEdit.onclick = () => openEditModal(u);
 
+    // 复制按钮 (新增)
+    const btnCopy = document.createElement('button');
+    btnCopy.className = 'btn btn-sm btn-outline';
+    btnCopy.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> 复制`;
+    btnCopy.onclick = async () => {
+      try {
+        await navigator.clipboard.writeText(fullUrl);
+        const originalHtml = btnCopy.innerHTML;
+        btnCopy.innerText = '已复制!';
+        btnCopy.classList.replace('btn-outline', 'btn-primary');
+        setTimeout(() => {
+          btnCopy.innerHTML = originalHtml;
+          btnCopy.classList.replace('btn-primary', 'btn-outline');
+        }, 1500);
+      } catch (err) {
+        console.error('Copy failed', err);
+      }
+    };
+
+    // 删除按钮
     const btnDel = document.createElement('button');
-    btnDel.className = 'btn-small del';
-    btnDel.textContent = '删除';
+    btnDel.className = 'btn btn-sm btn-danger-ghost';
+    btnDel.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
+    btnDel.title = "删除";
     btnDel.onclick = () => openDeleteModal(u);
 
-    tdActions.appendChild(btnEdit);
-    tdActions.appendChild(btnDel);
+    actionGroup.appendChild(btnEdit);
+    actionGroup.appendChild(btnCopy);
+    actionGroup.appendChild(btnDel);
+    tdActions.appendChild(actionGroup);
 
     tr.appendChild(tdName);
     tr.appendChild(tdActions);
 
-    // drag handlers
+    // 拖拽逻辑
     tr.addEventListener('dragstart', (ev) => {
       tr.classList.add('dragging');
       ev.dataTransfer.effectAllowed = 'move';
@@ -144,6 +204,7 @@ async function renderUsers() {
     tbody.appendChild(tr);
   });
 
+  // 绑定拖拽容器事件 (仅一次)
   if (!tbody.dataset.dragAttached) {
     tbody.dataset.dragAttached = '1';
     tbody.addEventListener('dragover', (e) => {
@@ -156,6 +217,8 @@ async function renderUsers() {
     });
   }
 }
+
+// --- 模态框逻辑 ---
 
 function showModal(id) {
   $('#modal-overlay').classList.remove('hidden');
@@ -173,93 +236,108 @@ function openAddModal() {
   $('#modal-form-status').innerText = '';
   $('#modal-form').dataset.mode = 'add';
   $('#modal-form-username').removeAttribute('disabled');
-  $('#modal-form-title').innerText = '添加用户并编辑链接';
+  $('#modal-form-title').innerText = '新建订阅用户';
+  $('#modal-form-save').innerText = '创建用户';
   showModal('modal-form');
+  $('#modal-form-username').focus();
 }
 
 async function openEditModal(username) {
-  $('#modal-form-title').innerText = '编辑: ' + username;
+  $('#modal-form-title').innerText = '配置: ' + username;
   $('#modal-form').dataset.mode = 'edit';
   $('#modal-form').dataset.user = username;
   $('#modal-form-username').value = username;
   $('#modal-form-username').setAttribute('disabled', 'true');
   $('#modal-form-status').innerText = '';
-  $('#modal-form-links').value = '';
+  $('#modal-form-links').value = '加载中...';
+  $('#modal-form-save').innerText = '保存更改';
   showModal('modal-form');
 
   const links = await api('/api/users/' + encodeURIComponent(username) + '/links');
-  if (Array.isArray(links)) $('#modal-form-links').value = links.join('\n');
+  if (Array.isArray(links)) {
+    $('#modal-form-links').value = links.join('\n');
+  } else {
+    $('#modal-form-links').value = '';
+  }
+  $('#modal-form-links').focus();
 }
 
 function closeAllModals() {
-  // 不关闭登录框，除非已登录
-  if (!$('#modal-login').classList.contains('hidden')) return;
+  // 不关闭登录框
+  if (!$('#login-screen').classList.contains('hidden')) return;
 
   hideModal('modal-form');
   hideModal('modal-delete');
 }
 
 async function openDeleteModal(username) {
-  $('#modal-delete-title').innerText = '删除: ' + username;
-  $('#modal-delete-message').innerText = '将永久删除用户：' + username + '（无法撤销）';
   $('#modal-delete').dataset.user = username;
   $('#modal-delete-status').innerText = '';
+  // 动态更新文本
+  $('#modal-delete-message').innerHTML = `确定要删除用户 <strong>${username}</strong> 吗？<br><span style="font-size:0.8em">此操作无法撤销</span>`;
   showModal('modal-delete');
 }
 
+// --- 初始化 ---
+
 document.addEventListener('DOMContentLoaded', () => {
-  // 初始检查登录状态
   checkAuth();
 
   $('#login-form').addEventListener('submit', doLogin);
   $('#btn-logout').addEventListener('click', doLogout);
-
   $('#add-user').addEventListener('click', () => openAddModal());
 
-  $('#modal-form-save').addEventListener('click', async () => {
+  // 模态框保存
+  $('#modal-form-save').addEventListener('click', async (e) => {
+    const btn = e.target;
+    const originalText = btn.innerText;
+    btn.disabled = true;
+    btn.innerText = '处理中...';
+
     const mode = $('#modal-form').dataset.mode;
     const username = $('#modal-form-username').value.trim();
     const raw = $('#modal-form-links').value.trim();
     const arr = raw.split('\n').map(s => s.trim()).filter(Boolean);
 
-    if (!username) { $('#modal-form-status').innerText = '用户名不能为空'; return; }
+    if (!username) {
+      $('#modal-form-status').innerText = '用户名不能为空';
+      btn.disabled = false;
+      btn.innerText = originalText;
+      return;
+    }
 
-    if (mode === 'add') {
-      const res = await api('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username }) });
-      if (res && typeof res === 'string' && res.includes('exists')) {
-        $('#modal-form-status').innerText = '用户已存在'; return;
-      }
-      if (!res) return; // auth failed
+    try {
+      if (mode === 'add') {
+        const res = await api('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username }) });
 
-      if (arr.length > 0) {
-        await api('/api/users/' + encodeURIComponent(username) + '/links', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ links: arr }) });
+        if (!res) throw new Error("Auth failed or Network error");
+
+        // 检查后端返回的错误文本 (如果不是JSON对象)
+        if (typeof res === 'string' && res.includes('exists')) {
+          $('#modal-form-status').innerText = '该用户已存在';
+          return;
+        }
+
+        if (arr.length > 0) {
+          await api('/api/users/' + encodeURIComponent(username) + '/links', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ links: arr }) });
+        }
+      } else if (mode === 'edit') {
+        const orig = $('#modal-form').dataset.user;
+        await api('/api/users/' + encodeURIComponent(orig) + '/links', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ links: arr }) });
       }
+
       hideModal('modal-form');
       await renderUsers();
-    } else if (mode === 'edit') {
-      const orig = $('#modal-form').dataset.user;
-      await api('/api/users/' + encodeURIComponent(orig) + '/links', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ links: arr }) });
-      hideModal('modal-form');
-      await renderUsers();
+    } catch (err) {
+      console.error(err);
+      $('#modal-form-status').innerText = '操作失败，请重试';
+    } finally {
+      btn.disabled = false;
+      btn.innerText = originalText;
     }
   });
 
-  $('#modal-form-copy').addEventListener('click', async () => {
-    const mode = $('#modal-form').dataset.mode;
-    let username;
-    if (mode === 'add') username = $('#modal-form-username').value.trim();
-    else username = $('#modal-form').dataset.user;
-
-    if (!username) { $('#modal-form-status').innerText = '用户名不能为空，无法复制'; return; }
-
-    let finalUrl = window.location.origin + '/' + encodeURIComponent(username);
-    try {
-      await navigator.clipboard.writeText(finalUrl);
-      $('#modal-form-status').innerText = '已复制链接: ' + finalUrl;
-      setTimeout(() => { $('#modal-form-status').innerText = ''; }, 1800);
-    } catch (e) { $('#modal-form-status').innerText = '复制失败: ' + e; }
-  });
-
+  // 删除确认
   $('#modal-delete-cancel').addEventListener('click', () => hideModal('modal-delete'));
   $('#modal-delete-confirm').addEventListener('click', async () => {
     const user = $('#modal-delete').dataset.user;

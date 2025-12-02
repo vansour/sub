@@ -7,18 +7,43 @@
   <title>Sub — 链接聚合</title>
   <link rel="icon" href="/static/favicon.ico" />
   <link rel="stylesheet" href="/static/style.css" />
-  <!-- 引入 Google Fonts (Inter) 以获得更好的排版 -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 
 <body>
-  <div class="app-container">
+
+  <!-- 1. 全屏登录界面 (默认显示，直到鉴权通过) -->
+  <div id="login-screen" class="login-container">
+    <div class="login-card">
+      <div class="login-header">
+        <div class="logo-icon large">S</div>
+        <h2>Sub Admin</h2>
+        <p class="text-muted">请登录以管理配置</p>
+      </div>
+      <form id="login-form">
+        <div class="form-group">
+          <label for="login-username">用户名</label>
+          <input id="login-username" name="username" type="text" required placeholder="admin" autocomplete="username" />
+        </div>
+        <div class="form-group">
+          <label for="login-password">密码</label>
+          <input id="login-password" name="password" type="password" required placeholder="••••••••"
+            autocomplete="current-password" />
+        </div>
+        <div id="login-status" class="form-status error"></div>
+        <button type="submit" class="btn btn-primary btn-block btn-lg">登 录</button>
+      </form>
+    </div>
+  </div>
+
+  <!-- 2. 主应用界面 (默认隐藏) -->
+  <div id="app-content" class="app-container hidden">
     <header class="app-header">
       <div class="header-left">
         <div class="logo-icon">S</div>
-        <h1>Sub <span class="badge">Link Aggregator</span></h1>
+        <h1>Sub <span class="badge">Dashboard</span></h1>
       </div>
       <div class="header-right">
         <button id="add-user" class="btn btn-primary">
@@ -29,22 +54,28 @@
           </svg>
           新建用户
         </button>
-        <button id="btn-logout" class="btn btn-outline hidden">登出</button>
+        <button id="btn-logout" class="btn btn-outline">登出</button>
       </div>
     </header>
 
     <main>
       <section class="content-card">
         <div class="card-header">
-          <h2>用户列表</h2>
-          <span class="hint">拖拽行可调整排序</span>
+          <h2>订阅用户列表</h2>
+          <span class="hint">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 5v14M19 12l-7 7-7-7" />
+            </svg>
+            拖拽可排序
+          </span>
         </div>
         <div class="table-responsive">
           <table id="user-table" class="modern-table">
             <thead>
               <tr>
-                <th width="50%">用户名 / 聚合链接</th>
-                <th width="50%" style="text-align: right;">操作</th>
+                <th width="40%">用户名</th>
+                <th width="60%" style="text-align: right;">操作</th>
               </tr>
             </thead>
             <tbody id="user-list">
@@ -55,94 +86,69 @@
       </section>
     </main>
 
-    <!-- Footer -->
     <footer>
       <p>Powered by <a href="https://github.com/vansour/sub" target="_blank">Sub</a></p>
     </footer>
+  </div>
 
-    <!-- 遮罩层 -->
-    <div id="modal-overlay" class="hidden"></div>
+  <!-- 3. 模态框遮罩 -->
+  <div id="modal-overlay" class="hidden"></div>
 
-    <!-- 登录弹窗 -->
-    <div id="modal-login" class="modal hidden">
-      <div class="modal-header">
-        <h3>管理员登录</h3>
-      </div>
-      <div class="modal-body">
-        <form id="login-form">
-          <div class="form-group">
-            <label for="login-username">用户名</label>
-            <input id="login-username" name="username" type="text" required placeholder="请输入管理员账号"
-              autocomplete="username" />
-          </div>
-          <div class="form-group">
-            <label for="login-password">密码</label>
-            <input id="login-password" name="password" type="password" required placeholder="请输入密码"
-              autocomplete="current-password" />
-          </div>
-          <div id="login-status" class="form-status error"></div>
-          <div class="modal-footer">
-            <button type="submit" class="btn btn-primary btn-block">登录系统</button>
-          </div>
-        </form>
-      </div>
+  <!-- 添加/编辑用户弹窗 -->
+  <div id="modal-form" class="modal hidden">
+    <div class="modal-header">
+      <h3 id="modal-form-title">配置用户</h3>
+      <button class="btn-icon-close" onclick="hideModal('modal-form')">
+        <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="18" y1="6" x2="6" y2="18"></line>
+          <line x1="6" y1="6" x2="18" y2="18"></line>
+        </svg>
+      </button>
     </div>
-
-    <!-- 添加/编辑用户弹窗 -->
-    <div id="modal-form" class="modal hidden">
-      <div class="modal-header">
-        <h3 id="modal-form-title">用户配置</h3>
-        <button id="modal-form-cancel-x" class="btn-icon-close" onclick="hideModal('modal-form')">×</button>
+    <div class="modal-body">
+      <div class="form-group">
+        <label for="modal-form-username">用户名</label>
+        <input id="modal-form-username" type="text" placeholder="仅限字母、数字、下划线" autocomplete="off" />
       </div>
-      <div class="modal-body">
-        <div class="form-group">
-          <label for="modal-form-username">用户名 <span class="required">*</span></label>
-          <input id="modal-form-username" type="text" placeholder="例如: alice" autocomplete="off" />
-          <p class="form-hint">将作为 URL 路径的一部分 (e.g. /alice)</p>
-        </div>
 
-        <div class="form-group">
-          <label for="modal-form-links">订阅链接源 <span class="required">*</span></label>
-          <textarea id="modal-form-links" rows="8"
-            placeholder="https://example.com/feed1&#10;https://example.com/feed2"></textarea>
-          <p class="form-hint">每行输入一个完整的 URL 地址</p>
-        </div>
+      <div class="form-group">
+        <label for="modal-form-links">订阅源列表</label>
+        <textarea id="modal-form-links" rows="8"
+          placeholder="https://site-a.com&#10;https://site-b.com/feed"></textarea>
+        <p class="form-hint">每行一个 URL，系统将按顺序合并抓取内容。</p>
+      </div>
 
-        <div id="modal-form-status" class="form-status"></div>
-      </div>
-      <div class="modal-footer">
-        <button id="modal-form-cancel" class="btn btn-text">取消</button>
-        <div class="footer-right">
-          <button id="modal-form-copy" class="btn btn-outline">复制聚合链接</button>
-          <button id="modal-form-save" class="btn btn-primary">保存更改</button>
-        </div>
-      </div>
+      <div id="modal-form-status" class="form-status"></div>
     </div>
+    <div class="modal-footer">
+      <button id="modal-form-cancel" class="btn btn-text">取消</button>
+      <!-- 复制按钮已移除，移至行内 -->
+      <button id="modal-form-save" class="btn btn-primary">保存更改</button>
+    </div>
+  </div>
 
-    <!-- 删除确认弹窗 -->
-    <div id="modal-delete" class="modal hidden modal-sm">
-      <div class="modal-header">
-        <h3>确认删除</h3>
+  <!-- 删除确认弹窗 -->
+  <div id="modal-delete" class="modal hidden modal-sm">
+    <div class="modal-body" style="text-align: center; padding-top: 2rem;">
+      <div class="warning-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none"
+          stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 6h18"></path>
+          <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"></path>
+          <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"></path>
+        </svg>
       </div>
-      <div class="modal-body">
-        <div class="warning-icon">
-          <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-            <line x1="12" y1="9" x2="12" y2="13"></line>
-            <line x1="12" y1="17" x2="12.01" y2="17"></line>
-          </svg>
-        </div>
-        <p id="modal-delete-message">您确定要删除此用户吗？此操作无法撤销。</p>
-        <div id="modal-delete-status" class="form-status error"></div>
-      </div>
-      <div class="modal-footer centered">
-        <button id="modal-delete-cancel" class="btn btn-text">取消</button>
+      <h3>确认删除?</h3>
+      <p id="modal-delete-message" class="text-muted">此操作将永久删除该用户配置。</p>
+      <div id="modal-delete-status" class="form-status error"></div>
+      <div class="modal-actions-centered">
+        <button id="modal-delete-cancel" class="btn btn-outline">取消</button>
         <button id="modal-delete-confirm" class="btn btn-danger">确认删除</button>
       </div>
     </div>
-
   </div>
+
   <script src="/static/script.js"></script>
 </body>
 
