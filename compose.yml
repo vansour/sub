@@ -13,6 +13,8 @@ services:
       - ./config:/app/config
     environment:
       - DATABASE_URL=sqlite:/app/data/sub.db
+      - ADMIN_USER=${ADMIN_USER:-admin}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-password}
     restart: unless-stopped
     logging:
       driver: 'json-file'
