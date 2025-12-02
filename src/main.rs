@@ -35,6 +35,12 @@ struct LoginPayload {
     password: String,
 }
 
+#[derive(Deserialize)]
+struct UpdateAccountPayload {
+    new_username: String,
+    new_password: String,
+}
+
 // 验证用户名是否合法
 fn is_valid_username(username: &str) -> bool {
     if username.is_empty() || username.len() > 64 {
@@ -149,6 +155,59 @@ async fn get_me(id: Option<Identity>) -> impl Responder {
     match id {
         Some(id) => HttpResponse::Ok().json(serde_json::json!({ "username": id.id().unwrap() })),
         None => HttpResponse::Unauthorized().body("Not logged in"),
+    }
+}
+
+#[put("/api/auth/account")]
+async fn update_account(
+    id: Identity,
+    payload: web::Json<UpdateAccountPayload>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let current_user = match id.id() {
+        Ok(u) => u,
+        Err(_) => return HttpResponse::Unauthorized().body("Unauthorized"),
+    };
+
+    let new_username = payload.new_username.trim();
+    let new_password = payload.new_password.trim();
+
+    if !is_valid_username(new_username) {
+        return HttpResponse::BadRequest().body("Invalid username format");
+    }
+    if new_password.is_empty() {
+        return HttpResponse::BadRequest().body("Password cannot be empty");
+    }
+
+    // Hash new password
+    let salt = SaltString::generate(&mut OsRng);
+    let argon2 = Argon2::default();
+    let password_hash = match argon2.hash_password(new_password.as_bytes(), &salt) {
+        Ok(h) => h.to_string(),
+        Err(e) => return HttpResponse::InternalServerError().body(format!("Hash error: {}", e)),
+    };
+
+    // Update DB (Primary key update)
+    let result =
+        sqlx::query("UPDATE admins SET username = ?, password_hash = ? WHERE username = ?")
+            .bind(new_username)
+            .bind(password_hash)
+            .bind(&current_user)
+            .execute(&data.db)
+            .await;
+
+    match result {
+        Ok(_) => {
+            // 登出用户，要求重新登录
+            id.logout();
+            HttpResponse::Ok().body("Account updated, please login again")
+        }
+        Err(e) => {
+            tracing::error!("Update account error: {}", e);
+            // 可能是用户名冲突
+            HttpResponse::InternalServerError()
+                .body("Failed to update account (username might exist)")
+        }
     }
 }
 
@@ -533,6 +592,7 @@ async fn main() -> std::io::Result<()> {
             .service(login)
             .service(logout)
             .service(get_me)
+            .service(update_account)
             .service(list_users)
             .service(create_user)
             .service(delete_user)

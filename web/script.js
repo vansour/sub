@@ -25,8 +25,8 @@ async function api(path, opts = {}) {
 
 function showLoginScreen() {
   $('#login-screen').classList.remove('hidden');
-  $('#app-content').classList.add('hidden');
-  $('#modal-overlay').classList.add('hidden'); // 确保其他遮罩关闭
+  $('#app-content').classList.add('hidden'); // 完全隐藏主应用 DOM
+  $('#modal-overlay').classList.add('hidden');
   $('#login-username').focus();
 }
 
@@ -53,7 +53,6 @@ async function doLogin(e) {
   const password = $('#login-password').value;
   const btn = e.target.querySelector('button');
 
-  // UI Loading state
   const originalText = btn.innerText;
   btn.innerText = '登录中...';
   btn.disabled = true;
@@ -66,12 +65,11 @@ async function doLogin(e) {
     });
 
     if (res.ok) {
-      $('#login-password').value = ''; // clear pass
+      $('#login-password').value = '';
       $('#login-status').innerText = '';
       showAppScreen();
     } else {
       $('#login-status').innerText = '登录失败：用户名或密码错误';
-      // 晃动动画效果 (可选)
       $('.login-card').animate([
         { transform: 'translateX(0)' },
         { transform: 'translateX(-5px)' },
@@ -89,6 +87,48 @@ async function doLogout() {
   await api('/api/auth/logout', { method: 'POST' });
   showLoginScreen();
 }
+
+// --- 账号管理逻辑 ---
+async function doUpdateAccount() {
+  const currentPassword = $('#account-current-password').value.trim();
+  const newUsername = $('#account-username').value.trim();
+  const newPassword = $('#account-password').value.trim();
+  const btn = $('#modal-account-save');
+  const status = $('#modal-account-status');
+
+  if (!currentPassword) {
+    status.innerText = "请输入当前密码";
+    return;
+  }
+  if (!newUsername || !newPassword) {
+    status.innerText = "新用户名和密码不能为空";
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerText = "更新中...";
+
+  const res = await fetch('/api/auth/account', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      current_password: currentPassword,
+      new_username: newUsername,
+      new_password: newPassword
+    })
+  });
+
+  if (res.ok) {
+    alert("账号更新成功，请重新登录");
+    window.location.reload();
+  } else {
+    const txt = await res.text();
+    status.innerText = "更新失败: " + txt;
+    btn.disabled = false;
+    btn.innerText = "保存更改";
+  }
+}
+
 
 // --- 拖拽排序 ---
 function getDragAfterElement(container, y) {
@@ -111,6 +151,12 @@ async function saveOrder() {
   await api('/api/users/order', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
 }
 
+// --- 自动调整 Textarea 高度 ---
+function autoResizeTextarea(el) {
+  el.style.height = 'auto';
+  el.style.height = el.scrollHeight + 'px';
+}
+
 // --- 核心渲染逻辑 ---
 
 async function renderUsers() {
@@ -121,7 +167,7 @@ async function renderUsers() {
   if (!Array.isArray(list)) { return; }
 
   if (list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="2" style="text-align:center; padding: 2rem; color: #94a3b8;">暂无用户，请点击右上角添加</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="2" style="text-align:center; padding: 3rem; color: #94a3b8;">暂无用户，请点击右上角添加</td></tr>';
     return;
   }
 
@@ -130,61 +176,56 @@ async function renderUsers() {
     tr.setAttribute('draggable', 'true');
     tr.dataset.username = u;
 
-    // 1. 用户名列
+    // 1. 用户名列 (仅显示用户名，不显示链接)
     const tdName = document.createElement('td');
-
     const nameDiv = document.createElement('div');
     nameDiv.className = 'user-name-cell';
     nameDiv.textContent = u;
-
-    const linkPreview = document.createElement('span');
-    linkPreview.className = 'user-link-preview';
-    const fullUrl = window.location.origin + '/' + encodeURIComponent(u);
-    linkPreview.textContent = fullUrl;
-
     tdName.appendChild(nameDiv);
-    tdName.appendChild(linkPreview);
 
-    // 2. 操作列 (编辑 -> 复制 -> 删除)
+    // 2. 操作列
     const tdActions = document.createElement('td');
     const actionGroup = document.createElement('div');
     actionGroup.className = 'action-group';
 
-    // 编辑按钮
-    const btnEdit = document.createElement('button');
-    btnEdit.className = 'btn btn-sm btn-outline';
-    btnEdit.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> 编辑`;
-    btnEdit.onclick = () => openEditModal(u);
+    const fullUrl = window.location.origin + '/' + encodeURIComponent(u);
 
-    // 复制按钮 (新增)
+    // (1) 复制按钮 (第一位)
     const btnCopy = document.createElement('button');
     btnCopy.className = 'btn btn-sm btn-outline';
-    btnCopy.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> 复制`;
+    btnCopy.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg> 复制`;
     btnCopy.onclick = async () => {
       try {
         await navigator.clipboard.writeText(fullUrl);
-        const originalHtml = btnCopy.innerHTML;
-        btnCopy.innerText = '已复制!';
-        btnCopy.classList.replace('btn-outline', 'btn-primary');
+        const originalHTML = btnCopy.innerHTML;
+        btnCopy.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> 已复制`;
+        btnCopy.classList.add('btn-success-state');
         setTimeout(() => {
-          btnCopy.innerHTML = originalHtml;
-          btnCopy.classList.replace('btn-primary', 'btn-outline');
+          btnCopy.innerHTML = originalHTML;
+          btnCopy.classList.remove('btn-success-state');
         }, 1500);
       } catch (err) {
         console.error('Copy failed', err);
+        alert("复制失败，请手动复制");
       }
     };
 
-    // 删除按钮
+    // (2) 编辑按钮
+    const btnEdit = document.createElement('button');
+    btnEdit.className = 'btn btn-sm btn-outline';
+    btnEdit.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> 编辑`;
+    btnEdit.onclick = () => openEditModal(u);
+
+    // (3) 删除按钮 (红色常驻)
     const btnDel = document.createElement('button');
-    btnDel.className = 'btn btn-sm btn-danger-ghost';
-    btnDel.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
-    btnDel.title = "删除";
+    btnDel.className = 'btn btn-sm btn-danger-soft';
+    btnDel.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> 删除`;
     btnDel.onclick = () => openDeleteModal(u);
 
-    actionGroup.appendChild(btnEdit);
     actionGroup.appendChild(btnCopy);
+    actionGroup.appendChild(btnEdit);
     actionGroup.appendChild(btnDel);
+
     tdActions.appendChild(actionGroup);
 
     tr.appendChild(tdName);
@@ -204,7 +245,7 @@ async function renderUsers() {
     tbody.appendChild(tr);
   });
 
-  // 绑定拖拽容器事件 (仅一次)
+  // 绑定拖拽容器事件
   if (!tbody.dataset.dragAttached) {
     tbody.dataset.dragAttached = '1';
     tbody.addEventListener('dragover', (e) => {
@@ -240,10 +281,12 @@ function openAddModal() {
   $('#modal-form-save').innerText = '创建用户';
   showModal('modal-form');
   $('#modal-form-username').focus();
+  // Reset height
+  $('#modal-form-links').style.height = 'auto';
 }
 
 async function openEditModal(username) {
-  $('#modal-form-title').innerText = '配置: ' + username;
+  $('#modal-form-title').innerText = '配置用户: ' + username;
   $('#modal-form').dataset.mode = 'edit';
   $('#modal-form').dataset.user = username;
   $('#modal-form-username').value = username;
@@ -254,26 +297,27 @@ async function openEditModal(username) {
   showModal('modal-form');
 
   const links = await api('/api/users/' + encodeURIComponent(username) + '/links');
+  const textarea = $('#modal-form-links');
   if (Array.isArray(links)) {
-    $('#modal-form-links').value = links.join('\n');
+    textarea.value = links.join('\n');
   } else {
-    $('#modal-form-links').value = '';
+    textarea.value = '';
   }
-  $('#modal-form-links').focus();
+  // Trigger auto resize after value set
+  autoResizeTextarea(textarea);
+  textarea.focus();
 }
 
 function closeAllModals() {
-  // 不关闭登录框
   if (!$('#login-screen').classList.contains('hidden')) return;
-
   hideModal('modal-form');
   hideModal('modal-delete');
+  hideModal('modal-account');
 }
 
 async function openDeleteModal(username) {
   $('#modal-delete').dataset.user = username;
   $('#modal-delete-status').innerText = '';
-  // 动态更新文本
   $('#modal-delete-message').innerHTML = `确定要删除用户 <strong>${username}</strong> 吗？<br><span style="font-size:0.8em">此操作无法撤销</span>`;
   showModal('modal-delete');
 }
@@ -286,6 +330,23 @@ document.addEventListener('DOMContentLoaded', () => {
   $('#login-form').addEventListener('submit', doLogin);
   $('#btn-logout').addEventListener('click', doLogout);
   $('#add-user').addEventListener('click', () => openAddModal());
+
+  // 账号管理
+  $('#btn-account').addEventListener('click', () => {
+    $('#account-username').value = '';
+    $('#account-password').value = '';
+    $('#account-current-password').value = '';
+    $('#modal-account-status').innerText = '';
+    $('#modal-account-save').disabled = false;
+    $('#modal-account-save').innerText = '保存更改';
+    showModal('modal-account');
+  });
+  $('#modal-account-save').addEventListener('click', doUpdateAccount);
+
+  // 绑定 Textarea 自动高度
+  $('#modal-form-links').addEventListener('input', function () {
+    autoResizeTextarea(this);
+  });
 
   // 模态框保存
   $('#modal-form-save').addEventListener('click', async (e) => {
@@ -310,9 +371,7 @@ document.addEventListener('DOMContentLoaded', () => {
       if (mode === 'add') {
         const res = await api('/api/users', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ username }) });
 
-        if (!res) throw new Error("Auth failed or Network error");
-
-        // 检查后端返回的错误文本 (如果不是JSON对象)
+        if (!res) throw new Error("Network error");
         if (typeof res === 'string' && res.includes('exists')) {
           $('#modal-form-status').innerText = '该用户已存在';
           return;
@@ -337,7 +396,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  // 删除确认
   $('#modal-delete-cancel').addEventListener('click', () => hideModal('modal-delete'));
   $('#modal-delete-confirm').addEventListener('click', async () => {
     const user = $('#modal-delete').dataset.user;
@@ -346,6 +404,9 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   $('#modal-form-cancel').addEventListener('click', () => hideModal('modal-form'));
+  $('#modal-form-cancel-x').addEventListener('click', () => hideModal('modal-form'));
+  $('#modal-account-cancel').addEventListener('click', () => hideModal('modal-account'));
+
   $('#modal-overlay').addEventListener('click', closeAllModals);
 
   document.addEventListener('keydown', (ev) => {

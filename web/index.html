@@ -14,7 +14,7 @@
 
 <body>
 
-  <!-- 1. 全屏登录界面 (默认显示，直到鉴权通过) -->
+  <!-- 1. 全屏登录界面 -->
   <div id="login-screen" class="login-container">
     <div class="login-card">
       <div class="login-header">
@@ -25,7 +25,8 @@
       <form id="login-form">
         <div class="form-group">
           <label for="login-username">用户名</label>
-          <input id="login-username" name="username" type="text" required placeholder="admin" autocomplete="username" />
+          <input id="login-username" name="username" type="text" required placeholder="请输入用户名"
+            autocomplete="username" />
         </div>
         <div class="form-group">
           <label for="login-password">密码</label>
@@ -38,7 +39,7 @@
     </div>
   </div>
 
-  <!-- 2. 主应用界面 (默认隐藏) -->
+  <!-- 2. 主应用界面 -->
   <div id="app-content" class="app-container hidden">
     <header class="app-header">
       <div class="header-left">
@@ -46,13 +47,13 @@
         <h1>Sub <span class="badge">Dashboard</span></h1>
       </div>
       <div class="header-right">
-        <button id="add-user" class="btn btn-primary">
+        <button id="btn-account" class="btn btn-outline">
           <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
             stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+            <circle cx="12" cy="7" r="4"></circle>
           </svg>
-          新建用户
+          账号设置
         </button>
         <button id="btn-logout" class="btn btn-outline">登出</button>
       </div>
@@ -61,14 +62,26 @@
     <main>
       <section class="content-card">
         <div class="card-header">
-          <h2>订阅用户列表</h2>
-          <span class="hint">
-            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+          <div style="display:flex; align-items:center; gap:12px;">
+            <h2>订阅用户列表</h2>
+            <span class="hint">
+              <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 5v14M19 12l-7 7-7-7" />
+              </svg>
+              拖拽可排序
+            </span>
+          </div>
+
+          <!-- 添加用户按钮 -->
+          <button id="add-user" class="btn btn-primary">
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none"
               stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M12 5v14M19 12l-7 7-7-7" />
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
-            拖拽可排序
-          </span>
+            新建用户
+          </button>
         </div>
         <div class="table-responsive">
           <table id="user-table" class="modern-table">
@@ -94,11 +107,41 @@
   <!-- 3. 模态框遮罩 -->
   <div id="modal-overlay" class="hidden"></div>
 
+  <!-- 账号设置弹窗 -->
+  <div id="modal-account" class="modal hidden">
+    <div class="modal-header">
+      <h3 id="modal-account-title">修改管理员账号</h3>
+      <button class="btn-icon-close" onclick="hideModal('modal-account')">×</button>
+    </div>
+    <div class="modal-body">
+      <!-- 新增：当前密码验证 -->
+      <div class="form-group">
+        <label for="account-current-password">当前密码 <span style="color:red">*</span></label>
+        <input id="account-current-password" type="password" placeholder="请输入当前密码以验证身份" />
+      </div>
+      <hr style="margin: 1.5rem 0; border: 0; border-top: 1px solid #eee;">
+      <div class="form-group">
+        <label for="account-username">新用户名</label>
+        <input id="account-username" type="text" placeholder="输入新用户名" />
+      </div>
+      <div class="form-group">
+        <label for="account-password">新密码</label>
+        <input id="account-password" type="password" placeholder="输入新密码" />
+      </div>
+      <p class="form-hint">修改成功后需要重新登录。</p>
+      <div id="modal-account-status" class="form-status"></div>
+    </div>
+    <div class="modal-footer">
+      <button id="modal-account-cancel" class="btn btn-text" onclick="hideModal('modal-account')">取消</button>
+      <button id="modal-account-save" class="btn btn-primary">保存更改</button>
+    </div>
+  </div>
+
   <!-- 添加/编辑用户弹窗 -->
   <div id="modal-form" class="modal hidden">
     <div class="modal-header">
       <h3 id="modal-form-title">配置用户</h3>
-      <button class="btn-icon-close" onclick="hideModal('modal-form')">
+      <button id="modal-form-cancel-x" class="btn-icon-close">
         <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none"
           stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -108,7 +151,7 @@
     </div>
     <div class="modal-body">
       <div class="form-group">
-        <label for="modal-form-username">用户名</label>
+        <label for="modal-form-username">用户名 <span style="color:red">*</span></label>
         <input id="modal-form-username" type="text" placeholder="仅限字母、数字、下划线" autocomplete="off" />
       </div>
 
@@ -123,7 +166,6 @@
     </div>
     <div class="modal-footer">
       <button id="modal-form-cancel" class="btn btn-text">取消</button>
-      <!-- 复制按钮已移除，移至行内 -->
       <button id="modal-form-save" class="btn btn-primary">保存更改</button>
     </div>
   </div>
