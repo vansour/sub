@@ -6,10 +6,15 @@ edition = "2024"
 [dependencies]
 actix-web = "4.12.0"
 actix-files = "0.6.8"
+# 新增鉴权相关依赖
+actix-identity = "0.8"
+actix-session = { version = "0.10", features = ["cookie-session"] }
+argon2 = { version = "0.5", features = ["std"] }
+rand = "0.8"
+
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros"] }
-# 使用 sqlx 配合 sqlite，启用 runtime-tokio-rustls 以支持异步运行时
 sqlx = { version = "0.8", features = ["sqlite", "runtime-tokio-rustls"] }
 reqwest = { version = "0.12.24", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli", "deflate", "stream"] }
 html-escape = "0.2.13"

@@ -1,9 +1,18 @@
 use actix_files::NamedFile;
+use actix_identity::{Identity, IdentityMiddleware};
+use actix_session::{SessionMiddleware, config::PersistentSession, storage::CookieSessionStore};
 use actix_web::{
-    App, HttpRequest, HttpResponse, HttpServer, Responder, Result, delete, get, middleware::Logger,
+    App, HttpMessage, HttpRequest, HttpResponse, HttpServer, Responder, Result,
+    cookie::{Key, time::Duration},
+    delete, get,
+    middleware::Logger,
     post, put, web,
 };
-use futures::stream::StreamExt; // 移除了未使用的 FuturesUnordered
+use argon2::{
+    Argon2,
+    password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString, rand_core::OsRng},
+};
+use futures::stream::StreamExt;
 use html_escape::decode_html_entities;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -12,33 +21,18 @@ use std::path::Path;
 
 mod log;
 
-// 数据库文件路径
 const DB_URL: &str = "sqlite:data/sub.db";
-// 限制并发抓取数
 const CONCURRENT_REQUESTS_LIMIT: usize = 5;
-
-// 修复 1: 移除了未使用的 UserRecord 结构体
 
 #[derive(Debug)]
 struct AppState {
     db: SqlitePool,
-    api_key: String,
 }
 
-// 检查 API Key 的辅助函数
-fn check_api(req: &HttpRequest, state: &web::Data<AppState>) -> bool {
-    if let Some(q) = req.uri().query() {
-        for (k, v) in url::form_urlencoded::parse(q.as_bytes()) {
-            if k == "api" && v == state.api_key.as_str() {
-                return true;
-            }
-        }
-    }
-    if req.headers().get("x-api-key").and_then(|h| h.to_str().ok()) == Some(state.api_key.as_str())
-    {
-        return true;
-    }
-    false
+#[derive(Deserialize)]
+struct LoginPayload {
+    username: String,
+    password: String,
 }
 
 // 验证用户名是否合法
@@ -53,6 +47,7 @@ fn is_valid_username(username: &str) -> bool {
 
 // 初始化数据库表
 async fn init_db(pool: &SqlitePool) -> std::result::Result<(), sqlx::Error> {
+    // 用户表
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS users (
@@ -64,14 +59,103 @@ async fn init_db(pool: &SqlitePool) -> std::result::Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
+
+    // 管理员表
+    sqlx::query(
+        r#"
+        CREATE TABLE IF NOT EXISTS admins (
+            username TEXT PRIMARY KEY,
+            password_hash TEXT NOT NULL
+        );
+        "#,
+    )
+    .execute(pool)
+    .await?;
+
     Ok(())
 }
 
-#[get("/")]
-async fn index(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
-    if !check_api(&req, &data) {
-        return HttpResponse::Forbidden().body("missing or invalid api key");
+// 确保至少有一个管理员账号
+async fn ensure_admin(pool: &SqlitePool) {
+    let count_res = sqlx::query("SELECT COUNT(*) FROM admins")
+        .fetch_one(pool)
+        .await;
+
+    let count: i64 = count_res.map(|r| r.get(0)).unwrap_or(0);
+
+    if count == 0 {
+        tracing::info!("No admins found. Creating default admin.");
+        let username = std::env::var("ADMIN_USER").unwrap_or_else(|_| "admin".to_string());
+        let password = std::env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "password".to_string());
+
+        let salt = SaltString::generate(&mut OsRng);
+        let argon2 = Argon2::default();
+        let password_hash = argon2
+            .hash_password(password.as_bytes(), &salt)
+            .unwrap()
+            .to_string();
+
+        let _ = sqlx::query("INSERT INTO admins (username, password_hash) VALUES (?, ?)")
+            .bind(&username)
+            .bind(&password_hash)
+            .execute(pool)
+            .await;
+
+        tracing::info!("Default admin created: {} / (hidden)", username);
     }
+}
+
+// --- 认证相关接口 ---
+
+#[post("/api/auth/login")]
+async fn login(
+    req: HttpRequest,
+    payload: web::Json<LoginPayload>,
+    data: web::Data<AppState>,
+) -> impl Responder {
+    let row = sqlx::query("SELECT password_hash FROM admins WHERE username = ?")
+        .bind(&payload.username)
+        .fetch_optional(&data.db)
+        .await;
+
+    match row {
+        Ok(Some(r)) => {
+            let hash_str: String = r.get(0);
+            let parsed_hash = PasswordHash::new(&hash_str).unwrap();
+            if Argon2::default()
+                .verify_password(payload.password.as_bytes(), &parsed_hash)
+                .is_ok()
+            {
+                // 登录成功，设置 Identity
+                Identity::login(&req.extensions(), payload.username.clone()).unwrap();
+                return HttpResponse::Ok().json("Logged in");
+            }
+        }
+        Ok(None) => {} // 用户不存在
+        Err(e) => tracing::error!("Login DB error: {}", e),
+    }
+
+    HttpResponse::Unauthorized().body("Invalid credentials")
+}
+
+#[post("/api/auth/logout")]
+async fn logout(id: Identity) -> impl Responder {
+    id.logout();
+    HttpResponse::Ok().body("Logged out")
+}
+
+#[get("/api/auth/me")]
+async fn get_me(id: Option<Identity>) -> impl Responder {
+    match id {
+        Some(id) => HttpResponse::Ok().json(serde_json::json!({ "username": id.id().unwrap() })),
+        None => HttpResponse::Unauthorized().body("Not logged in"),
+    }
+}
+
+// --- 业务接口 ---
+
+#[get("/")]
+async fn index(req: HttpRequest) -> impl Responder {
     match NamedFile::open("web/index.html") {
         Ok(f) => f.into_response(&req),
         Err(e) => HttpResponse::InternalServerError().body(format!("open index failed: {}", e)),
@@ -88,11 +172,8 @@ async fn static_files(path: web::Path<String>) -> Result<NamedFile> {
 }
 
 #[get("/api/users")]
-async fn list_users(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
-    if !check_api(&req, &data) {
-        return HttpResponse::Forbidden().body("invalid api");
-    }
-
+async fn list_users(_id: Identity, data: web::Data<AppState>) -> impl Responder {
+    // Identity 提取器会自动验证是否登录，未登录则返回 401
     let rows = sqlx::query("SELECT username FROM users ORDER BY rank ASC")
         .fetch_all(&data.db)
         .await;
@@ -116,13 +197,10 @@ struct CreateUserPayload {
 
 #[post("/api/users")]
 async fn create_user(
-    req: HttpRequest,
+    _id: Identity,
     payload: web::Json<CreateUserPayload>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    if !check_api(&req, &data) {
-        return HttpResponse::Forbidden().body("invalid api");
-    }
     let username = payload.username.trim().to_string();
 
     if !is_valid_username(&username) {
@@ -163,13 +241,10 @@ async fn create_user(
 
 #[delete("/api/users/{username}")]
 async fn delete_user(
-    req: HttpRequest,
+    _id: Identity,
     path: web::Path<String>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    if !check_api(&req, &data) {
-        return HttpResponse::Forbidden().body("invalid api");
-    }
     let username = path.into_inner();
 
     let result = sqlx::query("DELETE FROM users WHERE username = ?")
@@ -195,13 +270,10 @@ async fn delete_user(
 
 #[get("/api/users/{username}/links")]
 async fn get_links(
-    req: HttpRequest,
+    _id: Identity,
     path: web::Path<String>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    if !check_api(&req, &data) {
-        return HttpResponse::Forbidden().body("invalid api");
-    }
     let username = path.into_inner();
 
     let row = sqlx::query("SELECT links FROM users WHERE username = ?")
@@ -235,15 +307,11 @@ struct OrderPayload {
 
 #[put("/api/users/{username}/links")]
 async fn set_links(
-    req: HttpRequest,
+    _id: Identity,
     path: web::Path<String>,
     payload: web::Json<LinksPayload>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    if !check_api(&req, &data) {
-        return HttpResponse::Forbidden().body("invalid api");
-    }
-
     for link in &payload.links {
         if !link.starts_with("http://") && !link.starts_with("https://") {
             return HttpResponse::BadRequest().body(format!("Invalid URL: {}", link));
@@ -276,14 +344,10 @@ async fn set_links(
 
 #[put("/api/users/order")]
 async fn set_user_order(
-    req: HttpRequest,
+    _id: Identity,
     payload: web::Json<OrderPayload>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    if !check_api(&req, &data) {
-        return HttpResponse::Forbidden().body("invalid api");
-    }
-
     let order = &payload.order;
     if order.is_empty() {
         return HttpResponse::BadRequest().body("order must not be empty");
@@ -316,6 +380,7 @@ async fn set_user_order(
     HttpResponse::Ok().json(order)
 }
 
+// 公开接口，无需登录
 #[get("/{username}")]
 async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
     let username = path.into_inner();
@@ -348,7 +413,6 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
         .build()
         .unwrap();
 
-    // 修复 2: 使用 stream + buffer_unordered 来应用并发限制常量
     let fetches = futures::stream::iter(links.into_iter().enumerate().map(|(idx, link)| {
         let client = client.clone();
         async move {
@@ -429,7 +493,8 @@ async fn main() -> std::io::Result<()> {
         std::fs::File::create(db_path)?;
     }
 
-    let api_key = std::env::var("API").unwrap_or_else(|_| "api".into());
+    // 读取或生成 SESSION KEY
+    let secret_key = Key::generate();
 
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
@@ -441,7 +506,9 @@ async fn main() -> std::io::Result<()> {
         .await
         .expect("Failed to initialize DB schema");
 
-    let state = web::Data::new(AppState { db: pool, api_key });
+    ensure_admin(&pool).await;
+
+    let state = web::Data::new(AppState { db: pool });
 
     log::init_logging();
     tracing::info!("Starting server at http://0.0.0.0:8080 with SQLite");
@@ -451,8 +518,21 @@ async fn main() -> std::io::Result<()> {
             .app_data(state.clone())
             .wrap(actix_web::middleware::from_fn(log::trace_requests))
             .wrap(Logger::new("%a \"%r\" %s %b %D \"%{User-Agent}i\""))
+            // 启用 Identity 身份验证中间件
+            .wrap(IdentityMiddleware::default())
+            // 启用 Session 中间件
+            .wrap(
+                SessionMiddleware::builder(CookieSessionStore::default(), secret_key.clone())
+                    .cookie_name("sub_auth".to_owned())
+                    .cookie_secure(false) // 生产环境建议为 true 并配合 HTTPS
+                    .session_lifecycle(PersistentSession::default().session_ttl(Duration::days(7)))
+                    .build(),
+            )
             .service(index)
             .service(static_files)
+            .service(login)
+            .service(logout)
+            .service(get_me)
             .service(list_users)
             .service(create_user)
             .service(delete_user)
