@@ -23,8 +23,9 @@ pub fn init_logging(config: &AppConfig) {
     static INIT: Once = Once::new();
 
     INIT.call_once(|| {
-        // 将标准 log 库的日志重定向到 tracing
-        let _ = tracing_log::LogTracer::init();
+        // REMOVED: let _ = tracing_log::LogTracer::init();
+        // 原因: tracing_subscriber::init() 会自动调用 LogTracer::init()。
+        // 如果手动调用一次，init() 内部再次调用时会因为 logger 已设置而 panic (SetLoggerError)。
 
         // 解析日志级别
         let level = Level::from_str(&config.log.level).unwrap_or(Level::INFO);
@@ -57,9 +58,7 @@ pub fn init_logging(config: &AppConfig) {
         let file_appender = tracing_appender::rolling::daily(directory, filename);
         let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
 
-        // 注意：_guard 必须被持有才能保证日志写入，但在 actix-web 这种长期运行的 server 中，
-        // 直接泄漏它或者将其设为全局变量通常是可以接受的，或者仅依赖缓冲区刷新。
-        // 这里为了简化，我们不得不泄漏 guard，否则函数结束 writer 就会关闭。
+        // 必须泄漏 guard 以便在主线程结束后（或整个生命周期内）保持日志写入器开启
         std::mem::forget(_guard);
 
         // 文件日志使用 JSON 格式，包含所有字段
@@ -70,10 +69,14 @@ pub fn init_logging(config: &AppConfig) {
             .with_filter(filter);
 
         // 注册所有 Layer
-        tracing_subscriber::registry()
+        // 使用 try_init 避免重复初始化 panic
+        if let Err(e) = tracing_subscriber::registry()
             .with(stdout_layer)
             .with(file_layer)
-            .init();
+            .try_init()
+        {
+            eprintln!("Failed to initialize tracing subscriber: {}", e);
+        }
     });
 }
 
