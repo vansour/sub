@@ -9,8 +9,8 @@ pub struct ServerConfig {
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct LogConfig {
-    // 对应 config.toml 中的 logFilePath
-    #[serde(rename = "logFilePath")]
+    // 修改：移除 rename，直接使用 Rust 标准的 snake_case
+    // 对应的 TOML 键名将变为 log_file_path
     pub log_file_path: String,
     pub level: String,
 }
@@ -23,7 +23,6 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn load() -> Result<Self, ConfigError> {
-        // 构建配置，读取 config/config.toml
         let s = Config::builder()
             .add_source(File::with_name("config/config.toml"))
             .build()?;
