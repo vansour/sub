@@ -3,7 +3,7 @@ use actix_web::{
     App, HttpRequest, HttpResponse, HttpServer, Responder, Result, delete, get, middleware::Logger,
     post, put, web,
 };
-use futures::stream::{FuturesUnordered, StreamExt};
+use futures::stream::StreamExt; // 移除了未使用的 FuturesUnordered
 use html_escape::decode_html_entities;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -14,12 +14,10 @@ mod log;
 
 // 数据库文件路径
 const DB_URL: &str = "sqlite:data/sub.db";
+// 限制并发抓取数
+const CONCURRENT_REQUESTS_LIMIT: usize = 5;
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct UserRecord {
-    username: String,
-    links: Vec<String>, // 在数据库中存为 JSON 字符串
-}
+// 修复 1: 移除了未使用的 UserRecord 结构体
 
 #[derive(Debug)]
 struct AppState {
@@ -41,6 +39,16 @@ fn check_api(req: &HttpRequest, state: &web::Data<AppState>) -> bool {
         return true;
     }
     false
+}
+
+// 验证用户名是否合法
+fn is_valid_username(username: &str) -> bool {
+    if username.is_empty() || username.len() > 64 {
+        return false;
+    }
+    username
+        .chars()
+        .all(|c| c.is_alphanumeric() || c == '_' || c == '-')
 }
 
 // 初始化数据库表
@@ -73,7 +81,7 @@ async fn index(req: HttpRequest, data: web::Data<AppState>) -> impl Responder {
 #[get("/static/{filename:.*}")]
 async fn static_files(path: web::Path<String>) -> Result<NamedFile> {
     let filename = path.into_inner();
-    if filename.contains("..") {
+    if filename.contains("..") || filename.starts_with('/') || filename.contains('\\') {
         return Err(actix_web::error::ErrorForbidden("Invalid path"));
     }
     Ok(NamedFile::open(format!("web/{}", filename))?)
@@ -85,7 +93,6 @@ async fn list_users(req: HttpRequest, data: web::Data<AppState>) -> impl Respond
         return HttpResponse::Forbidden().body("invalid api");
     }
 
-    // 按 rank 排序查询
     let rows = sqlx::query("SELECT username FROM users ORDER BY rank ASC")
         .fetch_all(&data.db)
         .await;
@@ -117,11 +124,11 @@ async fn create_user(
         return HttpResponse::Forbidden().body("invalid api");
     }
     let username = payload.username.trim().to_string();
-    if username.is_empty() {
-        return HttpResponse::BadRequest().body("empty username");
+
+    if !is_valid_username(&username) {
+        return HttpResponse::BadRequest().body("Invalid username");
     }
 
-    // 获取当前最大 rank，新用户排在最后
     let max_rank_res = sqlx::query("SELECT MAX(rank) FROM users")
         .fetch_one(&data.db)
         .await;
@@ -143,10 +150,8 @@ async fn create_user(
             HttpResponse::Created().json(username)
         }
         Err(e) => {
-            // Check for unique constraint violation (SQLITE_CONSTRAINT_PRIMARYKEY code is 1555)
-            // But string matching is safer across versions sometimes.
             let msg = e.to_string();
-            if msg.contains("UNIQUE constraint failed") {
+            if msg.contains("UNIQUE constraint failed") || msg.contains("constraint failed") {
                 HttpResponse::Conflict().body("user exists")
             } else {
                 tracing::error!("Create user error: {}", e);
@@ -238,6 +243,13 @@ async fn set_links(
     if !check_api(&req, &data) {
         return HttpResponse::Forbidden().body("invalid api");
     }
+
+    for link in &payload.links {
+        if !link.starts_with("http://") && !link.starts_with("https://") {
+            return HttpResponse::BadRequest().body(format!("Invalid URL: {}", link));
+        }
+    }
+
     let username = path.into_inner();
     let links_json = serde_json::to_string(&payload.links).unwrap_or_else(|_| "[]".to_string());
 
@@ -277,7 +289,6 @@ async fn set_user_order(
         return HttpResponse::BadRequest().body("order must not be empty");
     }
 
-    // 使用事务批量更新排序
     let mut tx = match data.db.begin().await {
         Ok(tx) => tx,
         Err(e) => return HttpResponse::InternalServerError().body(e.to_string()),
@@ -305,12 +316,10 @@ async fn set_user_order(
     HttpResponse::Ok().json(order)
 }
 
-// GET /{username}
 #[get("/{username}")]
 async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
     let username = path.into_inner();
 
-    // 从 DB 获取 links
     let row = sqlx::query("SELECT links FROM users WHERE username = ?")
         .bind(&username)
         .fetch_optional(&data.db)
@@ -339,12 +348,11 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
         .build()
         .unwrap();
 
-    let mut futures = FuturesUnordered::new();
-    for (idx, link) in links.iter().enumerate() {
-        let link = link.clone();
-        let c = client.clone();
-        futures.push(async move {
-            let resp_text = match c.get(&link).send().await {
+    // 修复 2: 使用 stream + buffer_unordered 来应用并发限制常量
+    let fetches = futures::stream::iter(links.into_iter().enumerate().map(|(idx, link)| {
+        let client = client.clone();
+        async move {
+            let resp_text = match client.get(&link).send().await {
                 Ok(r) => match r.text().await {
                     Ok(t) => t,
                     Err(e) => format!("<!-- failed to read body {}: {} -->", link, e),
@@ -352,16 +360,21 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
                 Err(e) => format!("<!-- failed to fetch {}: {} -->", link, e),
             };
             (idx, resp_text)
-        });
-    }
-
-    let mut parts: Vec<(usize, String)> = vec![];
-    while let Some((idx, body)) = futures.next().await {
-        let text = html_to_text(&body);
-        if !text.trim().is_empty() {
-            parts.push((idx, text));
         }
-    }
+    }))
+    .buffer_unordered(CONCURRENT_REQUESTS_LIMIT);
+
+    let mut parts: Vec<(usize, String)> = fetches
+        .filter_map(|(idx, body)| async move {
+            let text = html_to_text(&body);
+            if text.trim().is_empty() {
+                None
+            } else {
+                Some((idx, text))
+            }
+        })
+        .collect()
+        .await;
 
     parts.sort_by_key(|(i, _)| *i);
     let ordered: Vec<String> = parts.into_iter().map(|(_, s)| s).collect();
@@ -372,7 +385,6 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
 }
 
 fn html_to_text(input: &str) -> String {
-    // (这里保留你之前的 Regex 逻辑，为了简洁我稍微缩写了，实际使用请保留原来的完整正则)
     let re_script = Regex::new(r"(?is)<(script|style)[^>]*>.*?</(script|style)>").unwrap();
     let without_scripts = re_script.replace_all(input, "");
 
@@ -408,27 +420,23 @@ async fn healthz() -> impl Responder {
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
-    // 确保 data 目录存在
     let db_path = Path::new("data/sub.db");
     if let Some(dir) = db_path.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
 
-    // 如果不存在DB文件，创建一个空文件以便 SqlitePool 连接
     if !db_path.exists() {
         std::fs::File::create(db_path)?;
     }
 
     let api_key = std::env::var("API").unwrap_or_else(|_| "api".into());
 
-    // 连接 SQLite
     let pool = SqlitePoolOptions::new()
         .max_connections(5)
         .connect(DB_URL)
         .await
         .expect("Failed to connect to SQLite");
 
-    // 初始化表结构
     init_db(&pool)
         .await
         .expect("Failed to initialize DB schema");
@@ -436,7 +444,7 @@ async fn main() -> std::io::Result<()> {
     let state = web::Data::new(AppState { db: pool, api_key });
 
     log::init_logging();
-    tracing::info!("Starting server at [http://0.0.0.0:8080](http://0.0.0.0:8080) with SQLite");
+    tracing::info!("Starting server at http://0.0.0.0:8080 with SQLite");
 
     HttpServer::new(move || {
         App::new()
