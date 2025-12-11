@@ -540,6 +540,35 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
         .body(full_text)
 }
 
+#[get("/{username}/clash")]
+async fn get_clash_config(path: web::Path<String>, req: HttpRequest) -> impl Responder {
+    let username = path.into_inner();
+
+    // Read config/clash.yaml
+    let clash_config = match std::fs::read_to_string("config/clash.yaml") {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::error!("Failed to read clash.yaml: {}", e);
+            return HttpResponse::InternalServerError().body("Config file missing");
+        }
+    };
+
+    // Determine base URL
+    let connection_info = req.connection_info();
+    let scheme = connection_info.scheme();
+    let host = connection_info.host();
+    let base_url = format!("{}://{}", scheme, host);
+
+    // Replace placeholders
+    let content = clash_config
+        .replace("{username}", &username)
+        .replace("{url}", &base_url);
+
+    HttpResponse::Ok()
+        .content_type("text/yaml; charset=utf-8")
+        .body(content)
+}
+
 fn html_to_text(input: &str) -> String {
     let document = Html::parse_document(input);
     let mut buffer = String::new();
@@ -712,6 +741,7 @@ async fn main() -> std::io::Result<()> {
             .service(get_links)
             .service(set_links)
             .service(healthz)
+            .service(get_clash_config)
             .service(merged_user)
     })
     .bind(&bind_addr)?
