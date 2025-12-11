@@ -210,6 +210,27 @@ async function renderUsers() {
       }
     };
 
+    // (1.5) 复制 Clash 配置按钮
+    const btnCopyClash = document.createElement('button');
+    btnCopyClash.className = 'btn btn-sm btn-outline';
+    btnCopyClash.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg> Clash`;
+    btnCopyClash.onclick = async () => {
+      const clashUrl = fullUrl + '/clash';
+      try {
+        await navigator.clipboard.writeText(clashUrl);
+        const originalHTML = btnCopyClash.innerHTML;
+        btnCopyClash.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> 已复制`;
+        btnCopyClash.classList.add('btn-success-state');
+        setTimeout(() => {
+          btnCopyClash.innerHTML = originalHTML;
+          btnCopyClash.classList.remove('btn-success-state');
+        }, 1500);
+      } catch (err) {
+        console.error('Copy failed', err);
+        alert("复制失败，请手动复制: " + clashUrl);
+      }
+    };
+
     // (2) 编辑按钮
     const btnEdit = document.createElement('button');
     btnEdit.className = 'btn btn-sm btn-outline';
@@ -223,6 +244,7 @@ async function renderUsers() {
     btnDel.onclick = () => openDeleteModal(u);
 
     actionGroup.appendChild(btnCopy);
+    actionGroup.appendChild(btnCopyClash);
     actionGroup.appendChild(btnEdit);
     actionGroup.appendChild(btnDel);
 
