@@ -210,24 +210,24 @@ async function renderUsers() {
       }
     };
 
-    // (1.5) 复制 Clash 配置按钮
-    const btnCopyClash = document.createElement('button');
-    btnCopyClash.className = 'btn btn-sm btn-outline';
-    btnCopyClash.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"></path><polyline points="13 2 13 9 20 9"></polyline></svg> Clash`;
-    btnCopyClash.onclick = async () => {
-      const clashUrl = fullUrl + '/clash';
+    // (1.5) Clash配置复制按钮
+    const clashUrl = window.location.origin + '/' + encodeURIComponent(u) + '/clash';
+    const btnClashCopy = document.createElement('button');
+    btnClashCopy.className = 'btn btn-sm btn-outline';
+    btnClashCopy.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg> Clash`;
+    btnClashCopy.onclick = async () => {
       try {
         await navigator.clipboard.writeText(clashUrl);
-        const originalHTML = btnCopyClash.innerHTML;
-        btnCopyClash.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> 已复制`;
-        btnCopyClash.classList.add('btn-success-state');
+        const originalHTML = btnClashCopy.innerHTML;
+        btnClashCopy.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg> 已复制`;
+        btnClashCopy.classList.add('btn-success-state');
         setTimeout(() => {
-          btnCopyClash.innerHTML = originalHTML;
-          btnCopyClash.classList.remove('btn-success-state');
+          btnClashCopy.innerHTML = originalHTML;
+          btnClashCopy.classList.remove('btn-success-state');
         }, 1500);
       } catch (err) {
         console.error('Copy failed', err);
-        alert("复制失败，请手动复制: " + clashUrl);
+        alert("复制失败，请手动复制");
       }
     };
 
@@ -244,7 +244,7 @@ async function renderUsers() {
     btnDel.onclick = () => openDeleteModal(u);
 
     actionGroup.appendChild(btnCopy);
-    actionGroup.appendChild(btnCopyClash);
+    actionGroup.appendChild(btnClashCopy);
     actionGroup.appendChild(btnEdit);
     actionGroup.appendChild(btnDel);
 

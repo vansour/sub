@@ -35,6 +35,7 @@ RUN mkdir -p /app/logs /app/data
 # 从 builder 阶段复制编译好的二进制文件
 COPY --from=builder /app/target/release/sub /app/sub
 COPY web /app/web
+COPY config /app/config.default
 COPY entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
