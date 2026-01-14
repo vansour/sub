@@ -82,14 +82,13 @@ async fn init_db(pool: &PgPool) -> std::result::Result<(), sqlx::Error> {
     .fetch_optional(pool)
     .await?;
 
-    if let Some((data_type,)) = col_info {
-        if data_type != "jsonb" {
+    if let Some((data_type,)) = col_info
+        && data_type != "jsonb" {
             tracing::info!("Converting users.links from {} to jsonb", data_type);
             sqlx::query("ALTER TABLE users ALTER COLUMN links TYPE JSONB USING links::JSONB")
                 .execute(pool)
                 .await?;
         }
-    }
 
     // 管理员表
     sqlx::query(
