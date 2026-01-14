@@ -24,8 +24,7 @@ use argon2::{
 use futures::stream::StreamExt;
 use scraper::{Html, Node};
 use serde::{Deserialize, Serialize};
-use sqlx::{Row, PgPool, postgres::PgPoolOptions};
-
+use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 
 mod config; // 新增模块
 mod log;
@@ -33,9 +32,10 @@ mod log;
 const DB_URL: &str = "postgres://postgres:password@db:5432/sub";
 const CONCURRENT_REQUESTS_LIMIT: usize = 5;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct AppState {
     db: PgPool,
+    client: reqwest::Client,
 }
 
 #[derive(Deserialize)]
@@ -62,18 +62,34 @@ fn is_valid_username(username: &str) -> bool {
 
 // 初始化数据库表 (恢复此函数，替代 migrate! 宏)
 async fn init_db(pool: &PgPool) -> std::result::Result<(), sqlx::Error> {
-    // 用户表
+    // 用户表 - 将 links 改为 JSONB
     sqlx::query(
         r#"
         CREATE TABLE IF NOT EXISTS users (
             username TEXT PRIMARY KEY,
-            links TEXT NOT NULL DEFAULT '[]',
+            links JSONB NOT NULL DEFAULT '[]',
             rank INTEGER NOT NULL DEFAULT 0
         );
         "#,
     )
     .execute(pool)
     .await?;
+
+    // 如果字段已经存在但是 TEXT 类型，尝试转换为 JSONB (适用于平滑升级)
+    let col_info: Option<(String,)> = sqlx::query_as(
+        "SELECT data_type FROM information_schema.columns WHERE table_name = 'users' AND column_name = 'links'"
+    )
+    .fetch_optional(pool)
+    .await?;
+
+    if let Some((data_type,)) = col_info {
+        if data_type != "jsonb" {
+            tracing::info!("Converting users.links from {} to jsonb", data_type);
+            sqlx::query("ALTER TABLE users ALTER COLUMN links TYPE JSONB USING links::JSONB")
+                .execute(pool)
+                .await?;
+        }
+    }
 
     // 管理员表
     sqlx::query(
@@ -369,8 +385,7 @@ async fn get_links(
 
     match row {
         Ok(Some(r)) => {
-            let links_json: String = r.get("links");
-            let links: Vec<String> = serde_json::from_str(&links_json).unwrap_or_default();
+            let links: serde_json::Value = r.get("links");
             HttpResponse::Ok().json(links)
         }
         Ok(None) => HttpResponse::NotFound().body("user not found"),
@@ -405,10 +420,10 @@ async fn set_links(
     }
 
     let username = path.into_inner();
-    let links_json = serde_json::to_string(&payload.links).unwrap_or_else(|_| "[]".to_string());
+    let links_value = serde_json::to_value(&payload.links).unwrap_or(serde_json::json!([]));
 
     let result = sqlx::query("UPDATE users SET links = $1 WHERE username = $2")
-        .bind(&links_json)
+        .bind(&links_value)
         .bind(&username)
         .execute(&data.db)
         .await;
@@ -477,8 +492,8 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
 
     let links: Vec<String> = match row {
         Ok(Some(r)) => {
-            let json: String = r.get("links");
-            serde_json::from_str(&json).unwrap_or_default()
+            let val: serde_json::Value = r.get("links");
+            serde_json::from_value(val).unwrap_or_default()
         }
         Ok(None) => return HttpResponse::NotFound().body("user not found"),
         Err(e) => {
@@ -493,20 +508,8 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
             .body("");
     }
 
-    // 优化: 避免 reqwest builder 的 unwrap
-    let client = match reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(10))
-        .build()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::error!("Failed to build reqwest client: {}", e);
-            return HttpResponse::InternalServerError().body("Internal Server Error");
-        }
-    };
-
     let fetches = futures::stream::iter(links.into_iter().enumerate().map(|(idx, link)| {
-        let client = client.clone();
+        let client = data.client.clone();
         async move {
             let resp_text = match client.get(&link).send().await {
                 Ok(r) => match r.text().await {
@@ -521,13 +524,17 @@ async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl
     .buffer_unordered(CONCURRENT_REQUESTS_LIMIT);
 
     let mut parts: Vec<(usize, String)> = fetches
-        .filter_map(|(idx, body)| async move {
-            let text = html_to_text(&body);
-            if text.trim().is_empty() {
-                None
-            } else {
-                Some((idx, text))
+        .then(|(idx, body)| async move {
+            // 使用 web::block 处理 CPU 密集型的 HTML 解析
+            let text_res = web::block(move || html_to_text(&body)).await;
+            match text_res {
+                Ok(text) => (idx, text),
+                Err(_) => (idx, String::new()),
             }
+        })
+        .filter(|(_, text)| {
+            let is_empty = text.trim().is_empty();
+            async move { !is_empty }
         })
         .collect()
         .await;
@@ -704,7 +711,14 @@ async fn main() -> std::io::Result<()> {
 
     ensure_admin(&pool).await;
 
-    let state = web::Data::new(AppState { db: pool });
+    // 初始化全局共享的 HTTP 客户端
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(10))
+        .pool_max_idle_per_host(5)
+        .build()
+        .expect("Failed to create reqwest client");
+
+    let state = web::Data::new(AppState { db: pool, client });
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
 
     tracing::info!("Starting server at http://{} with PostgreSQL", bind_addr);
