@@ -5,6 +5,8 @@ use serde::Deserialize;
 pub struct ServerConfig {
     pub host: String,
     pub port: u16,
+    pub secret_key: String,
+    pub cookie_secure: bool,
 }
 
 #[derive(Debug, Deserialize, Clone)]

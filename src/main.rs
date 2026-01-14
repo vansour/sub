@@ -1,4 +1,4 @@
-use actix_files::NamedFile;
+use actix_files::Files;
 use actix_identity::{Identity, IdentityMiddleware};
 use actix_session::{SessionMiddleware, config::PersistentSession, storage::CookieSessionStore};
 use actix_web::{
@@ -83,12 +83,13 @@ async fn init_db(pool: &PgPool) -> std::result::Result<(), sqlx::Error> {
     .await?;
 
     if let Some((data_type,)) = col_info
-        && data_type != "jsonb" {
-            tracing::info!("Converting users.links from {} to jsonb", data_type);
-            sqlx::query("ALTER TABLE users ALTER COLUMN links TYPE JSONB USING links::JSONB")
-                .execute(pool)
-                .await?;
-        }
+        && data_type != "jsonb"
+    {
+        tracing::info!("Converting users.links from {} to jsonb", data_type);
+        sqlx::query("ALTER TABLE users ALTER COLUMN links TYPE JSONB USING links::JSONB")
+            .execute(pool)
+            .await?;
+    }
 
     // 管理员表
     sqlx::query(
@@ -255,23 +256,6 @@ async fn update_account(
 }
 
 // --- 业务接口 ---
-
-#[get("/")]
-async fn index(req: HttpRequest) -> impl Responder {
-    match NamedFile::open("web/index.html") {
-        Ok(f) => f.into_response(&req),
-        Err(e) => HttpResponse::InternalServerError().body(format!("open index failed: {}", e)),
-    }
-}
-
-#[get("/static/{filename:.*}")]
-async fn static_files(path: web::Path<String>) -> Result<NamedFile> {
-    let filename = path.into_inner();
-    if filename.contains("..") || filename.starts_with('/') || filename.contains('\\') {
-        return Err(actix_web::error::ErrorForbidden("Invalid path"));
-    }
-    Ok(NamedFile::open(format!("web/{}", filename))?)
-}
 
 #[get("/api/users")]
 async fn list_users(_id: Identity, data: web::Data<AppState>) -> impl Responder {
@@ -695,7 +679,8 @@ async fn main() -> std::io::Result<()> {
     // 使用环境变量 DATABASE_URL（若未设置使用内置默认），因此不再在本地创建数据库文件
     let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| DB_URL.to_string());
 
-    let secret_key = Key::generate();
+    // 从配置中加载或生成固定密钥
+    let secret_key = Key::from(config.server.secret_key.as_bytes());
 
     let pool = PgPoolOptions::new()
         .max_connections(5)
@@ -719,24 +704,25 @@ async fn main() -> std::io::Result<()> {
 
     let state = web::Data::new(AppState { db: pool, client });
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
+    let app_config = web::Data::new(config.clone());
 
     tracing::info!("Starting server at http://{} with PostgreSQL", bind_addr);
 
     HttpServer::new(move || {
         App::new()
             .app_data(state.clone())
+            .app_data(app_config.clone())
             .wrap(actix_web::middleware::from_fn(log::trace_requests))
             // 移除了 Actix 的 Logger 避免重复日志
             .wrap(IdentityMiddleware::default())
             .wrap(
                 SessionMiddleware::builder(CookieSessionStore::default(), secret_key.clone())
                     .cookie_name("sub_auth".to_owned())
-                    .cookie_secure(false)
+                    .cookie_secure(app_config.server.cookie_secure)
                     .session_lifecycle(PersistentSession::default().session_ttl(Duration::days(7)))
                     .build(),
             )
-            .service(index)
-            .service(static_files)
+            .service(Files::new("/static", "web"))
             .service(login)
             .service(logout)
             .service(get_me)
@@ -750,6 +736,10 @@ async fn main() -> std::io::Result<()> {
             .service(healthz)
             .service(get_clash_config)
             .service(merged_user)
+            .route(
+                "/",
+                web::get().to(|| async { actix_files::NamedFile::open("web/index.html") }),
+            )
     })
     .bind(&bind_addr)?
     .run()

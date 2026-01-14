@@ -15,10 +15,18 @@ mkdir -p "$LOG_DIR"
 # 注意：如果你之前已经运行过，可能需要手动删除旧的错误 config.toml，或者重建容器
 if [ ! -f "$CONFIG_FILE" ]; then
     echo "Generating default config.toml at $CONFIG_FILE..."
+    
+    # 生成随机加密密钥 (如果环境变量未提供)
+    if [ -z "$SECRET_KEY" ]; then
+        SECRET_KEY=$(cat /dev/urandom | tr -dc 'a-zA-Z0-9' | fold -w 64 | head -n 1)
+    fi
+
     cat <<EOF > "$CONFIG_FILE"
 [server]
 host = "${SERVER_HOST:-0.0.0.0}"
 port = ${SERVER_PORT:-8080}
+secret_key = "${SECRET_KEY}"
+cookie_secure = ${COOKIE_SECURE:-false}
 
 [log]
 # 修改为 snake_case 以匹配 Rust 结构体
