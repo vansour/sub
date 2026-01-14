@@ -11,7 +11,7 @@ Sub 是一个使用 Rust (Actix-web) 开发的轻量级、高性能的多用户�
 - 智能 HTML 解析：使用 `scraper` + DOM 遍历保留段落与换行、过滤 `<script>`/`<style>` 等标签
 - 管理后台：基于 Cookie 的 Session 认证，前端包含管理面板（`web/`）
 - 日志：控制台紧凑输出 + 文件 JSON 格式写入（每天轮转）
-- 持久化：SQLite 用作轻量数据库（路径：`data/sub.db`）
+- 持久化：PostgreSQL（通过 `DATABASE_URL` 环境变量配置）
 - 容器友好：Dockerfile + `docker compose` 支持快速部署
 
 ---
@@ -52,14 +52,14 @@ level = "debug"
 可用环境变量（覆盖默认配置或用于初始化）:
 - `ADMIN_USER` — 初始化管理员用户名（仅数据库为空时生效）
 - `ADMIN_PASSWORD` — 初始化管理员密码（仅数据库为空时生效）
-- `DATABASE_URL` — SQLite 连接字符串，示例：`sqlite:/app/data/sub.db`（容器默认）
+- `DATABASE_URL` — PostgreSQL 连接字符串，示例：`postgres://postgres:password@db:5432/sub`（容器默认）
 - `SERVER_HOST` / `SERVER_PORT` — 覆盖 `config.toml` 中的设置
 - `LOG_FILE_PATH` / `LOG_LEVEL` — 覆盖日志设置
 
 ---
 
 ## 构建与本地运行（开发者）🛠️
-前提：安装 Rust (stable)、SQLite
+前提：安装 Rust (stable)、PostgreSQL（或使用 Docker Compose 中的 `db` 服务）
 
 本地运行步骤：
 
@@ -81,7 +81,7 @@ EOF
 cargo run --release
 ```
 
-注意：本项目在启动时会在 `data/` 下创建 `sub.db`（若不存在），并自动创建用户与管理员表结构，因此不依赖 `sqlx migrate` 来初始化表结构。
+注意：本项目在启动时会自动创建表结构（使用 `CREATE TABLE IF NOT EXISTS`），因此不依赖 `sqlx migrate`。确保 `DATABASE_URL` 可用以便服务连接数据库并创建表结构。
 
 ---
 

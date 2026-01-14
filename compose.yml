@@ -12,9 +12,22 @@ services:
       - ./data:/app/data
       - ./config:/app/config
     environment:
-      - DATABASE_URL=sqlite:/app/data/sub.db
+      - DATABASE_URL=postgres://postgres:password@db:5432/sub
       - ADMIN_USER=${ADMIN_USER:-admin}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-password}
+    depends_on:
+      - db
+    restart: unless-stopped
+    
+  db:
+    image: ghcr.io/vansour/postgres:trixie
+    container_name: sub-db
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=sub
+    volumes:
+      - ./pgdata:/var/lib/postgresql
     restart: unless-stopped
     logging:
       driver: 'json-file'

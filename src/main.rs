@@ -24,18 +24,18 @@ use argon2::{
 use futures::stream::StreamExt;
 use scraper::{Html, Node};
 use serde::{Deserialize, Serialize};
-use sqlx::{Row, SqlitePool, sqlite::SqlitePoolOptions};
-use std::path::Path;
+use sqlx::{Row, PgPool, postgres::PgPoolOptions};
+
 
 mod config; // 新增模块
 mod log;
 
-const DB_URL: &str = "sqlite:data/sub.db";
+const DB_URL: &str = "postgres://postgres:password@db:5432/sub";
 const CONCURRENT_REQUESTS_LIMIT: usize = 5;
 
 #[derive(Debug)]
 struct AppState {
-    db: SqlitePool,
+    db: PgPool,
 }
 
 #[derive(Deserialize)]
@@ -61,7 +61,7 @@ fn is_valid_username(username: &str) -> bool {
 }
 
 // 初始化数据库表 (恢复此函数，替代 migrate! 宏)
-async fn init_db(pool: &SqlitePool) -> std::result::Result<(), sqlx::Error> {
+async fn init_db(pool: &PgPool) -> std::result::Result<(), sqlx::Error> {
     // 用户表
     sqlx::query(
         r#"
@@ -91,7 +91,7 @@ async fn init_db(pool: &SqlitePool) -> std::result::Result<(), sqlx::Error> {
 }
 
 // 确保至少有一个管理员账号
-async fn ensure_admin(pool: &SqlitePool) {
+async fn ensure_admin(pool: &PgPool) {
     let count_res = sqlx::query("SELECT COUNT(*) FROM admins")
         .fetch_one(pool)
         .await;
@@ -114,7 +114,7 @@ async fn ensure_admin(pool: &SqlitePool) {
             }
         };
 
-        let _ = sqlx::query("INSERT INTO admins (username, password_hash) VALUES (?, ?)")
+        let _ = sqlx::query("INSERT INTO admins (username, password_hash) VALUES ($1, $2)")
             .bind(&username)
             .bind(&password_hash)
             .execute(pool)
@@ -132,7 +132,7 @@ async fn login(
     payload: web::Json<LoginPayload>,
     data: web::Data<AppState>,
 ) -> impl Responder {
-    let row = sqlx::query("SELECT password_hash FROM admins WHERE username = ?")
+    let row = sqlx::query("SELECT password_hash FROM admins WHERE username = $1")
         .bind(&payload.username)
         .fetch_optional(&data.db)
         .await;
@@ -219,7 +219,7 @@ async fn update_account(
     };
 
     let result =
-        sqlx::query("UPDATE admins SET username = ?, password_hash = ? WHERE username = ?")
+        sqlx::query("UPDATE admins SET username = $1, password_hash = $2 WHERE username = $3")
             .bind(new_username)
             .bind(password_hash)
             .bind(&current_user)
@@ -302,7 +302,7 @@ async fn create_user(
         Err(_) => 1,
     };
 
-    let result = sqlx::query("INSERT INTO users (username, links, rank) VALUES (?, '[]', ?)")
+    let result = sqlx::query("INSERT INTO users (username, links, rank) VALUES ($1, '[]', $2)")
         .bind(&username)
         .bind(next_rank)
         .execute(&data.db)
@@ -314,8 +314,8 @@ async fn create_user(
             HttpResponse::Created().json(username)
         }
         Err(e) => {
-            let msg = e.to_string();
-            if msg.contains("UNIQUE constraint failed") || msg.contains("constraint failed") {
+            let msg = e.to_string().to_lowercase();
+            if msg.contains("duplicate key value") || msg.contains("unique constraint") {
                 HttpResponse::Conflict().body("user exists")
             } else {
                 tracing::error!("Create user error: {}", e);
@@ -333,7 +333,7 @@ async fn delete_user(
 ) -> impl Responder {
     let username = path.into_inner();
 
-    let result = sqlx::query("DELETE FROM users WHERE username = ?")
+    let result = sqlx::query("DELETE FROM users WHERE username = $1")
         .bind(&username)
         .execute(&data.db)
         .await;
@@ -362,7 +362,7 @@ async fn get_links(
 ) -> impl Responder {
     let username = path.into_inner();
 
-    let row = sqlx::query("SELECT links FROM users WHERE username = ?")
+    let row = sqlx::query("SELECT links FROM users WHERE username = $1")
         .bind(&username)
         .fetch_optional(&data.db)
         .await;
@@ -407,7 +407,7 @@ async fn set_links(
     let username = path.into_inner();
     let links_json = serde_json::to_string(&payload.links).unwrap_or_else(|_| "[]".to_string());
 
-    let result = sqlx::query("UPDATE users SET links = ? WHERE username = ?")
+    let result = sqlx::query("UPDATE users SET links = $1 WHERE username = $2")
         .bind(&links_json)
         .bind(&username)
         .execute(&data.db)
@@ -445,7 +445,7 @@ async fn set_user_order(
     };
 
     for (i, username) in order.iter().enumerate() {
-        let res = sqlx::query("UPDATE users SET rank = ? WHERE username = ?")
+        let res = sqlx::query("UPDATE users SET rank = $1 WHERE username = $2")
             .bind(i as i64)
             .bind(username)
             .execute(&mut *tx)
@@ -470,7 +470,7 @@ async fn set_user_order(
 async fn merged_user(path: web::Path<String>, data: web::Data<AppState>) -> impl Responder {
     let username = path.into_inner();
 
-    let row = sqlx::query("SELECT links FROM users WHERE username = ?")
+    let row = sqlx::query("SELECT links FROM users WHERE username = $1")
         .bind(&username)
         .fetch_optional(&data.db)
         .await;
@@ -686,22 +686,16 @@ async fn main() -> std::io::Result<()> {
     // 2. 初始化日志
     log::init_logging(&config);
 
-    let db_path = Path::new("data/sub.db");
-    if let Some(dir) = db_path.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-
-    if !db_path.exists() {
-        std::fs::File::create(db_path)?;
-    }
+    // 使用环境变量 DATABASE_URL（若未设置使用内置默认），因此不再在本地创建数据库文件
+    let db_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| DB_URL.to_string());
 
     let secret_key = Key::generate();
 
-    let pool = SqlitePoolOptions::new()
+    let pool = PgPoolOptions::new()
         .max_connections(5)
-        .connect(DB_URL)
+        .connect(&db_url)
         .await
-        .expect("Failed to connect to SQLite");
+        .expect("Failed to connect to Postgres");
 
     // 恢复调用 init_db 而不是使用 migrate 宏
     init_db(&pool)
@@ -713,7 +707,7 @@ async fn main() -> std::io::Result<()> {
     let state = web::Data::new(AppState { db: pool });
     let bind_addr = format!("{}:{}", config.server.host, config.server.port);
 
-    tracing::info!("Starting server at http://{} with SQLite", bind_addr);
+    tracing::info!("Starting server at http://{} with PostgreSQL", bind_addr);
 
     HttpServer::new(move || {
         App::new()
