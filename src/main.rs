@@ -8,7 +8,6 @@ use actix_web::{
     HttpResponse,
     HttpServer,
     Responder,
-    Result,
     cookie::{Key, time::Duration},
     delete,
     get,
