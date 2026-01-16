@@ -1,4 +1,6 @@
 # Rust build artifacts
+/data/
+/pgdata/
 /target/
 **/*.rs.bk
 *.pdb

@@ -31,5 +31,7 @@ tracing-log = "0.1"
 # 新增日志文件追加器
 tracing-appender = "0.2"
 # 新增配置管理
-config = "0.14"
+# config = "0.14"
 uuid = { version = "1.5", features = ["v4"] }
+derive_more = { version = "2.1.1", features = ["display", "error"] }
+base64 = "0.22.1"

@@ -8,9 +8,6 @@ services:
       dockerfile: Dockerfile
     ports:
       - "8080:8080"
-    volumes:
-      - ./data:/app/data
-      - ./config:/app/config
     environment:
       - DATABASE_URL=postgres://postgres:password@db:5432/sub
       - ADMIN_USER=${ADMIN_USER:-admin}

@@ -5,10 +5,10 @@ use actix_web::dev::{ServiceRequest, ServiceResponse};
 use actix_web::http::header::{HeaderName, HeaderValue, USER_AGENT};
 use actix_web::middleware::Next;
 use std::path::Path;
-use std::str::FromStr;
+// use std::str::FromStr;
 use std::sync::Once;
 use std::time::Instant;
-use tracing::{Level, error, info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
@@ -23,15 +23,14 @@ pub fn init_logging(config: &AppConfig) {
     static INIT: Once = Once::new();
 
     INIT.call_once(|| {
+        println!("Initializing logging...");
         // REMOVED: let _ = tracing_log::LogTracer::init();
         // 原因: tracing_subscriber::init() 会自动调用 LogTracer::init()。
         // 如果手动调用一次，init() 内部再次调用时会因为 logger 已设置而 panic (SetLoggerError)。
 
         // 解析日志级别
-        let level = Level::from_str(&config.log.level).unwrap_or(Level::INFO);
-        let filter = tracing_subscriber::filter::Targets::new()
-            .with_target("sub", level) // 也就是当前应用的日志级别
-            .with_default(Level::WARN); // 其他库（如 sqlx, hyper）默认只显示 WARN
+        let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(&config.log.level));
 
         // --- Layer 1: 控制台输出 (Docker logs) ---
         // 使用 Compact 格式，去除时间戳（Docker 自身会打时间戳），保持整洁
@@ -41,7 +40,7 @@ pub fn init_logging(config: &AppConfig) {
             .with_file(false)
             .with_level(true)
             .with_ansi(true) // 支持颜色
-            .with_filter(filter.clone());
+            .with_filter(env_filter.clone());
 
         // --- Layer 2: 文件输出 ---
         // 解析文件路径
@@ -66,7 +65,7 @@ pub fn init_logging(config: &AppConfig) {
             .json()
             .with_writer(non_blocking)
             .with_span_events(FmtSpan::CLOSE) // 记录请求结束时间
-            .with_filter(filter);
+            .with_filter(env_filter);
 
         // 注册所有 Layer
         // 使用 try_init 避免重复初始化 panic

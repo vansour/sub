@@ -35,9 +35,6 @@ RUN mkdir -p /app/logs /app/data
 # 从 builder 阶段复制编译好的二进制文件
 COPY --from=builder /app/target/release/sub /app/sub
 COPY web /app/web
-COPY config /app/config.default
-COPY entrypoint.sh /usr/local/bin/entrypoint.sh
-RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENV RUST_LOG=info
 ENV RUST_BACKTRACE=1
@@ -47,5 +44,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
     CMD /usr/bin/curl -f http://localhost:8080/healthz || exit 1
 
 EXPOSE 8080
-ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["/app/sub"]
