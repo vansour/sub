@@ -7,9 +7,6 @@
   <title>Sub — 链接聚合</title>
   <link rel="icon" href="/static/favicon.ico" />
   <link rel="stylesheet" href="/static/style.css?v=1" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 
 <body>
@@ -116,10 +113,10 @@
     <div class="modal-body">
       <!-- 新增：当前密码验证 -->
       <div class="form-group">
-        <label for="account-current-password">当前密码 <span style="color:red">*</span></label>
+        <label for="account-current-password">当前密码 <span class="text-danger">*</span></label>
         <input id="account-current-password" type="password" placeholder="请输入当前密码以验证身份" />
       </div>
-      <hr style="margin: 1.5rem 0; border: 0; border-top: 1px solid #eee;">
+      <hr class="form-divider">
       <div class="form-group">
         <label for="account-username">新用户名</label>
         <input id="account-username" type="text" placeholder="输入新用户名" />
@@ -151,15 +148,24 @@
     </div>
     <div class="modal-body">
       <div class="form-group">
-        <label for="modal-form-username">用户名 <span style="color:red">*</span></label>
+        <label for="modal-form-username">用户名 <span class="text-danger">*</span></label>
         <input id="modal-form-username" type="text" placeholder="仅限字母、数字、下划线" autocomplete="off" />
       </div>
 
       <div class="form-group">
-        <label for="modal-form-links">订阅源列表</label>
-        <textarea id="modal-form-links" rows="8"
-          placeholder="https://site-a.com&#10;https://site-b.com/feed"></textarea>
-        <p class="form-hint">每行一个 URL，系统将按顺序合并抓取内容。</p>
+        <label>订阅源列表</label>
+        <div id="link-list-container" class="link-list">
+          <!-- JS 渲染链接行 -->
+        </div>
+        <button id="btn-add-link" class="btn btn-outline btn-sm" style="margin-top: 12px; width: 100%; border-style: dashed;">
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="12" y1="5" x2="12" y2="19"></line>
+            <line x1="5" y1="12" x2="19" y2="12"></line>
+          </svg>
+          添加订阅链接
+        </button>
+        <p class="form-hint">拖拽左侧图标可调整抓取顺序。</p>
       </div>
 
       <div id="modal-form-status" class="form-status"></div>

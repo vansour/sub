@@ -130,9 +130,9 @@ async function doUpdateAccount() {
 }
 
 
-// --- 拖拽排序 ---
-function getDragAfterElement(container, y) {
-  const draggableElements = [...container.querySelectorAll('tr:not(.dragging)')];
+// --- 拖拽排序辅助 ---
+function getDragAfterElement(container, y, selector = 'tr:not(.dragging)') {
+  const draggableElements = [...container.querySelectorAll(selector)];
   let closest = { offset: Number.NEGATIVE_INFINITY, element: null };
   for (const child of draggableElements) {
     const box = child.getBoundingClientRect();
@@ -151,10 +151,66 @@ async function saveOrder() {
   await api('/api/users/order', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ order }) });
 }
 
-// --- 自动调整 Textarea 高度 ---
-function autoResizeTextarea(el) {
-  el.style.height = 'auto';
-  el.style.height = el.scrollHeight + 'px';
+// --- 订阅源链接行管理 ---
+
+function createLinkItem(url = '') {
+  const div = document.createElement('div');
+  div.className = 'link-item';
+  div.setAttribute('draggable', 'true');
+
+  div.innerHTML = `
+    <div class="drag-handle">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+        <circle cx="9" cy="6" r="1.5"></circle>
+        <circle cx="9" cy="12" r="1.5"></circle>
+        <circle cx="9" cy="18" r="1.5"></circle>
+        <circle cx="15" cy="6" r="1.5"></circle>
+        <circle cx="15" cy="12" r="1.5"></circle>
+        <circle cx="15" cy="18" r="1.5"></circle>
+      </svg>
+    </div>
+    <div class="link-input-wrapper">
+      <input type="text" placeholder="https://example.com/rss" value="${url}" />
+    </div>
+    <button class="btn btn-text btn-sm btn-remove-link" title="移除">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+    </button>
+  `;
+
+  // 移除逻辑
+  div.querySelector('.btn-remove-link').onclick = () => div.remove();
+
+  // 拖拽逻辑 (内部)
+  div.addEventListener('dragstart', (e) => {
+    div.classList.add('dragging');
+  });
+  div.addEventListener('dragend', () => {
+    div.classList.remove('dragging');
+  });
+
+  return div;
+}
+
+function renderLinkContainer(links = []) {
+  const container = $('#link-list-container');
+  container.innerHTML = '';
+  links.forEach(url => container.appendChild(createLinkItem(url)));
+  if (links.length === 0) {
+    container.appendChild(createLinkItem(''));
+  }
+}
+
+// 绑定链接列表的拖拽目标
+function attachLinkListDnD() {
+  const container = $('#link-list-container');
+  container.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    const dragging = container.querySelector('.link-item.dragging');
+    if (!dragging) return;
+    const after = getDragAfterElement(container, e.clientY, '.link-item:not(.dragging)');
+    if (after == null) container.appendChild(dragging);
+    else container.insertBefore(dragging, after);
+  });
 }
 
 // --- 核心渲染逻辑 ---
@@ -167,7 +223,7 @@ async function renderUsers() {
   if (!Array.isArray(list)) { return; }
 
   if (list.length === 0) {
-    tbody.innerHTML = '<tr><td colspan="2" style="text-align:center; padding: 3rem; color: #94a3b8;">暂无用户，请点击右上角添加</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="2" style="text-align:center; padding: 4rem 1rem;"><div class="text-muted" style="margin-bottom: 1rem;"><svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round" style="opacity: 0.5;"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg></div><div class="text-muted">暂无用户，点击右上角新建</div></td></tr>';
     return;
   }
 
@@ -253,9 +309,9 @@ async function renderUsers() {
     tbody.dataset.dragAttached = '1';
     tbody.addEventListener('dragover', (e) => {
       e.preventDefault();
-      const dragging = document.querySelector('.dragging');
+      const dragging = tbody.querySelector('tr.dragging');
       if (!dragging) return;
-      const after = getDragAfterElement(tbody, e.clientY);
+      const after = getDragAfterElement(tbody, e.clientY, 'tr:not(.dragging)');
       if (after == null) tbody.appendChild(dragging);
       else tbody.insertBefore(dragging, after);
     });
@@ -276,7 +332,7 @@ function hideModal(id) {
 
 function openAddModal() {
   $('#modal-form-username').value = '';
-  $('#modal-form-links').value = '';
+  renderLinkContainer([]);
   $('#modal-form-status').innerText = '';
   $('#modal-form').dataset.mode = 'add';
   $('#modal-form-username').removeAttribute('disabled');
@@ -284,8 +340,6 @@ function openAddModal() {
   $('#modal-form-save').innerText = '创建用户';
   showModal('modal-form');
   $('#modal-form-username').focus();
-  // Reset height
-  $('#modal-form-links').style.height = 'auto';
 }
 
 async function openEditModal(username) {
@@ -295,20 +349,17 @@ async function openEditModal(username) {
   $('#modal-form-username').value = username;
   $('#modal-form-username').setAttribute('disabled', 'true');
   $('#modal-form-status').innerText = '';
-  $('#modal-form-links').value = '加载中...';
+  // Initial empty state while loading
+  renderLinkContainer([]);
   $('#modal-form-save').innerText = '保存更改';
   showModal('modal-form');
 
   const links = await api('/api/users/' + encodeURIComponent(username) + '/links');
-  const textarea = $('#modal-form-links');
   if (Array.isArray(links)) {
-    textarea.value = links.join('\n');
+    renderLinkContainer(links);
   } else {
-    textarea.value = '';
+    renderLinkContainer([]);
   }
-  // Trigger auto resize after value set
-  autoResizeTextarea(textarea);
-  textarea.focus();
 }
 
 function closeAllModals() {
@@ -346,10 +397,11 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   $('#modal-account-save').addEventListener('click', doUpdateAccount);
 
-  // 绑定 Textarea 自动高度
-  $('#modal-form-links').addEventListener('input', function () {
-    autoResizeTextarea(this);
+  // 链接列表管理
+  $('#btn-add-link').addEventListener('click', () => {
+    $('#link-list-container').appendChild(createLinkItem(''));
   });
+  attachLinkListDnD();
 
   // 模态框保存
   $('#modal-form-save').addEventListener('click', async (e) => {
@@ -360,8 +412,10 @@ document.addEventListener('DOMContentLoaded', () => {
 
     const mode = $('#modal-form').dataset.mode;
     const username = $('#modal-form-username').value.trim();
-    const raw = $('#modal-form-links').value.trim();
-    const arr = raw.split('\n').map(s => s.trim()).filter(Boolean);
+
+    // 从 DOM 中收集所有链接
+    const linkInputs = document.querySelectorAll('#link-list-container input');
+    const arr = Array.from(linkInputs).map(input => input.value.trim()).filter(Boolean);
 
     if (!username) {
       $('#modal-form-status').innerText = '用户名不能为空';

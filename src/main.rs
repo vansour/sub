@@ -81,7 +81,7 @@ async fn ensure_admin(pool: &PgPool) {
     if count == 0 {
         tracing::info!("No admins found. Creating default admin.");
         let username = std::env::var("ADMIN_USER").unwrap_or_else(|_| "admin".to_string());
-        let password = std::env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "password".to_string());
+        let password = std::env::var("ADMIN_PASSWORD").unwrap_or_else(|_| "admin".to_string());
 
         let salt = SaltString::generate(&mut OsRng);
         let argon2 = Argon2::default();
@@ -100,7 +100,7 @@ async fn ensure_admin(pool: &PgPool) {
             .execute(pool)
             .await;
 
-        tracing::info!("Default admin created: {} / (hidden)", username);
+        tracing::info!("Default admin created: {} / {}", username, password);
     }
 }
 
