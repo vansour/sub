@@ -182,6 +182,11 @@ function createLinkItem(url = '') {
 
   // 拖拽逻辑 (内部)
   div.addEventListener('dragstart', (e) => {
+    const handle = div.querySelector('.drag-handle');
+    if (!handle.contains(e.target)) {
+      e.preventDefault();
+      return;
+    }
     div.classList.add('dragging');
   });
   div.addEventListener('dragend', () => {
@@ -274,7 +279,13 @@ async function renderUsers() {
     btnEdit.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path></svg> 编辑`;
     btnEdit.onclick = () => openEditModal(u);
 
-    // (3) 删除按钮 (红色常驻)
+    // (3) 打开按钮
+    const btnOpen = document.createElement('button');
+    btnOpen.className = 'btn btn-sm btn-outline';
+    btnOpen.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg> 打开`;
+    btnOpen.onclick = () => window.open(fullUrl, '_blank');
+
+    // (4) 删除按钮 (红色常驻)
     const btnDel = document.createElement('button');
     btnDel.className = 'btn btn-sm btn-danger-soft';
     btnDel.innerHTML = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg> 删除`;
@@ -283,6 +294,7 @@ async function renderUsers() {
     actionGroup.appendChild(btnCopy);
 
     actionGroup.appendChild(btnEdit);
+    actionGroup.appendChild(btnOpen);
     actionGroup.appendChild(btnDel);
 
     tdActions.appendChild(actionGroup);
@@ -320,6 +332,8 @@ async function renderUsers() {
 
 // --- 模态框逻辑 ---
 
+let _editLoading = false;
+
 function showModal(id) {
   $('#modal-overlay').classList.remove('hidden');
   $(`#${id}`).classList.remove('hidden');
@@ -343,22 +357,30 @@ function openAddModal() {
 }
 
 async function openEditModal(username) {
-  $('#modal-form-title').innerText = '配置用户: ' + username;
-  $('#modal-form').dataset.mode = 'edit';
-  $('#modal-form').dataset.user = username;
-  $('#modal-form-username').value = username;
-  $('#modal-form-username').setAttribute('disabled', 'true');
-  $('#modal-form-status').innerText = '';
-  // Initial empty state while loading
-  renderLinkContainer([]);
-  $('#modal-form-save').innerText = '保存更改';
-  showModal('modal-form');
+  if (_editLoading) return;
+  _editLoading = true;
 
-  const links = await api('/api/users/' + encodeURIComponent(username) + '/links');
-  if (Array.isArray(links)) {
-    renderLinkContainer(links);
-  } else {
-    renderLinkContainer([]);
+  try {
+    const links = await api('/api/users/' + encodeURIComponent(username) + '/links');
+    if (links === null) return;
+
+    $('#modal-form-title').innerText = '配置用户: ' + username;
+    $('#modal-form').dataset.mode = 'edit';
+    $('#modal-form').dataset.user = username;
+    $('#modal-form-username').value = username;
+    $('#modal-form-username').setAttribute('disabled', 'true');
+    $('#modal-form-status').innerText = '';
+
+    if (Array.isArray(links)) {
+      renderLinkContainer(links);
+    } else {
+      renderLinkContainer([]);
+    }
+
+    $('#modal-form-save').innerText = '保存更改';
+    showModal('modal-form');
+  } finally {
+    _editLoading = false;
   }
 }
 
