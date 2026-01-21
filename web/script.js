@@ -181,9 +181,14 @@ function createLinkItem(url = '') {
   div.querySelector('.btn-remove-link').onclick = () => div.remove();
 
   // 拖拽逻辑 (内部)
-  div.addEventListener('dragstart', (e) => {
+  let dragAllowed = false;
+  div.addEventListener('mousedown', (e) => {
     const handle = div.querySelector('.drag-handle');
-    if (!handle.contains(e.target)) {
+    dragAllowed = handle.contains(e.target);
+  });
+
+  div.addEventListener('dragstart', (e) => {
+    if (!dragAllowed) {
       e.preventDefault();
       return;
     }
@@ -333,10 +338,48 @@ async function renderUsers() {
 // --- 模态框逻辑 ---
 
 let _editLoading = false;
+let _modalViewMode = 'list'; // 'list' or 'text'
 
 function showModal(id) {
   $('#modal-overlay').classList.remove('hidden');
   $(`#${id}`).classList.remove('hidden');
+  
+  if (id === 'modal-form') {
+    switchView('list', false); // Don't sync when opening!
+  }
+}
+
+function switchView(mode, sync = true) {
+  _modalViewMode = mode;
+  if (mode === 'list') {
+    if (sync) {
+      // Sync text to list
+      const text = $('#link-textarea').value;
+      const links = text.split('\n').map(l => l.trim()).filter(Boolean);
+      renderLinkContainer(links);
+    }
+    
+    $('#btn-view-list').classList.add('active');
+    $('#btn-view-text').classList.remove('active');
+    $('#link-list-view').classList.remove('hidden');
+    $('#link-text-view').classList.add('hidden');
+    $('#text-view-tools').classList.add('hidden');
+    $('#drag-hint').classList.remove('hidden');
+  } else {
+    if (sync) {
+      // Sync list to text
+      const inputs = document.querySelectorAll('#link-list-container input');
+      const links = Array.from(inputs).map(i => i.value.trim()).filter(Boolean);
+      $('#link-textarea').value = links.join('\n');
+    }
+    
+    $('#btn-view-list').classList.remove('active');
+    $('#btn-view-text').classList.add('active');
+    $('#link-list-view').classList.add('hidden');
+    $('#link-text-view').classList.remove('hidden');
+    $('#text-view-tools').classList.remove('hidden');
+    $('#drag-hint').classList.add('hidden');
+  }
 }
 
 function hideModal(id) {
@@ -346,6 +389,9 @@ function hideModal(id) {
 
 function openAddModal() {
   $('#modal-form-username').value = '';
+  $('#link-textarea').value = '';
+  $('#search-input').value = '';
+  $('#replace-input').value = '';
   renderLinkContainer([]);
   $('#modal-form-status').innerText = '';
   $('#modal-form').dataset.mode = 'add';
@@ -360,6 +406,11 @@ async function openEditModal(username) {
   if (_editLoading) return;
   _editLoading = true;
 
+  // Clear previous state immediately
+  $('#link-textarea').value = '';
+  $('#search-input').value = '';
+  $('#replace-input').value = '';
+
   try {
     const links = await api('/api/users/' + encodeURIComponent(username) + '/links');
     if (links === null) return;
@@ -371,11 +422,9 @@ async function openEditModal(username) {
     $('#modal-form-username').setAttribute('disabled', 'true');
     $('#modal-form-status').innerText = '';
 
-    if (Array.isArray(links)) {
-      renderLinkContainer(links);
-    } else {
-      renderLinkContainer([]);
-    }
+    const linksArr = Array.isArray(links) ? links : [];
+    renderLinkContainer(linksArr);
+    $('#link-textarea').value = linksArr.join('\n');
 
     $('#modal-form-save').innerText = '保存更改';
     showModal('modal-form');
@@ -425,6 +474,25 @@ document.addEventListener('DOMContentLoaded', () => {
   });
   attachLinkListDnD();
 
+  // 视图切换
+  $('#btn-view-list').addEventListener('click', () => switchView('list'));
+  $('#btn-view-text').addEventListener('click', () => switchView('text'));
+
+  // 快捷操作
+  $('#btn-select-all').addEventListener('click', () => {
+    const ta = $('#link-textarea');
+    ta.focus();
+    ta.select();
+  });
+
+  $('#btn-replace-all').addEventListener('click', () => {
+    const find = $('#search-input').value;
+    const replace = $('#replace-input').value;
+    if (!find) return;
+    const ta = $('#link-textarea');
+    ta.value = ta.value.split(find).join(replace);
+  });
+
   // 模态框保存
   $('#modal-form-save').addEventListener('click', async (e) => {
     const btn = e.target;
@@ -435,9 +503,15 @@ document.addEventListener('DOMContentLoaded', () => {
     const mode = $('#modal-form').dataset.mode;
     const username = $('#modal-form-username').value.trim();
 
-    // 从 DOM 中收集所有链接
-    const linkInputs = document.querySelectorAll('#link-list-container input');
-    const arr = Array.from(linkInputs).map(input => input.value.trim()).filter(Boolean);
+    // 根据当前视图收集数据
+    let arr = [];
+    if (_modalViewMode === 'list') {
+      const linkInputs = document.querySelectorAll('#link-list-container input');
+      arr = Array.from(linkInputs).map(input => input.value.trim()).filter(Boolean);
+    } else {
+      const text = $('#link-textarea').value;
+      arr = text.split('\n').map(l => l.trim()).filter(Boolean);
+    }
 
     if (!username) {
       $('#modal-form-status').innerText = '用户名不能为空';

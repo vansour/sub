@@ -153,19 +153,45 @@
       </div>
 
       <div class="form-group">
-        <label>订阅源列表</label>
-        <div id="link-list-container" class="link-list">
-          <!-- JS 渲染链接行 -->
+        <div style="display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 8px;">
+          <label style="margin-bottom: 0;">订阅源列表</label>
+          <div class="view-switcher">
+            <button id="btn-view-list" class="btn btn-text btn-sm active">列表视图</button>
+            <button id="btn-view-text" class="btn btn-text btn-sm">文本视图</button>
+          </div>
         </div>
-        <button id="btn-add-link" class="btn btn-outline btn-sm" style="margin-top: 12px; width: 100%; border-style: dashed;">
-          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
-            stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="12" y1="5" x2="12" y2="19"></line>
-            <line x1="5" y1="12" x2="19" y2="12"></line>
-          </svg>
-          添加订阅链接
-        </button>
-        <p class="form-hint">拖拽左侧图标可调整抓取顺序。</p>
+
+        <!-- 文本视图工具栏 (默认隐藏) -->
+        <div id="text-view-tools" class="hidden" style="margin-bottom: 8px; display: flex; gap: 8px; flex-wrap: wrap; background: var(--color-bg-canvas); padding: 8px; border-radius: var(--radius-sm); border: 1px solid var(--color-stroke-subtle);">
+          <div style="display: flex; gap: 4px; flex: 1; min-width: 200px;">
+            <input id="search-input" type="text" placeholder="查找..." class="input-sm" style="flex: 1;" />
+            <input id="replace-input" type="text" placeholder="替换为..." class="input-sm" style="flex: 1;" />
+          </div>
+          <div style="display: flex; gap: 4px;">
+            <button id="btn-replace-all" class="btn btn-outline btn-sm">全量替换</button>
+            <button id="btn-select-all" class="btn btn-outline btn-sm">全选文本</button>
+          </div>
+        </div>
+
+        <div id="link-list-view">
+          <div id="link-list-container" class="link-list">
+            <!-- JS 渲染链接行 -->
+          </div>
+          <button id="btn-add-link" class="btn btn-outline btn-sm" style="margin-top: 12px; width: 100%; border-style: dashed;">
+            <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none"
+              stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
+            </svg>
+            添加订阅链接
+          </button>
+        </div>
+
+        <div id="link-text-view" class="hidden">
+          <textarea id="link-textarea" placeholder="每行一个订阅链接" style="width: 100%; height: 260px; font-family: monospace; resize: vertical; border-radius: var(--radius-sm); border: 1px solid var(--color-stroke-strong); padding: 10px; background: var(--color-bg-canvas); color: var(--color-text-primary);"></textarea>
+        </div>
+
+        <p class="form-hint" id="drag-hint">拖拽左侧图标可调整抓取顺序。</p>
       </div>
 
       <div id="modal-form-status" class="form-status"></div>
